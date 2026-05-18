@@ -8,5 +8,10 @@
   },
   "license": "Apache-2.0",
   "repository": "https://github.com/opensearch-project/opensearch-agent-skills",
-  "keywords": ["search", "observability", "opensearch", "aws"]
+  "homepage": "https://github.com/opensearch-project/opensearch-agent-skills",
+  "keywords": ["search", "observability", "opensearch", "aws"],
+  "skills": [
+    "./skills/opensearch-skills",
+    "./skills/solr-opensearch-migration-advisor"
+  ]
 }
