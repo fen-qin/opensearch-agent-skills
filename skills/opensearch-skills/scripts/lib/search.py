@@ -4,6 +4,7 @@ Provides smart field detection, semantic/hybrid search, agentic search,
 suggestions, autocomplete, and preview text generation.
 """
 
+import json
 import re
 from opensearchpy import OpenSearch
 
@@ -282,6 +283,116 @@ def _resolve_semantic_runtime_hints(
 
 
 # ---------------------------------------------------------------------------
+# Structured query detection and building
+# ---------------------------------------------------------------------------
+_STRUCTURED_PATTERN = re.compile(r"^([a-zA-Z_][a-zA-Z0-9_.]*)\s*([:<>=!]+)\s*(.+)$")
+
+
+def _parse_structured_query(query_text: str, field_specs: dict) -> list[dict] | None:
+    """Parse a query string into structured filter clauses if it matches
+    field:value patterns. Returns None if the query is not structured.
+
+    Supports:
+      - field:value (exact match for keyword/ip, term for numeric/date)
+      - field:>value, field:>=value, field:<value, field:<=value (range)
+      - Multiple clauses separated by spaces/AND (all must match)
+    """
+    if not field_specs:
+        return None
+
+    clauses = []
+    # Split on " AND " or just try the whole string as a single clause
+    parts = re.split(r"\s+AND\s+", query_text.strip())
+
+    for part in parts:
+        part = part.strip()
+        m = _STRUCTURED_PATTERN.match(part)
+        if not m:
+            return None  # Not a structured query
+
+        field_name, operator, value = m.group(1), m.group(2), m.group(3).strip()
+
+        # Resolve field: check exact name, then try .keyword sub-field
+        resolved_field = None
+        field_type = None
+        if field_name in field_specs:
+            resolved_field = field_name
+            field_type = field_specs[field_name].get("type", "")
+        elif f"{field_name}.keyword" in field_specs:
+            resolved_field = f"{field_name}.keyword"
+            field_type = "keyword"
+        else:
+            # Try case-insensitive match
+            for spec_name, spec in field_specs.items():
+                if spec_name.lower() == field_name.lower():
+                    resolved_field = spec_name
+                    field_type = spec.get("type", "")
+                    break
+            if not resolved_field:
+                return None  # Unknown field, not structured
+
+        if field_type not in _EXACT_TERM_FIELD_TYPES and field_type != "text":
+            return None
+
+        # Build clause based on operator
+        if operator in (":", ":=", "="):
+            # For text fields, use match; for exact types, use term
+            if field_type == "text":
+                clauses.append({"match": {resolved_field: value}})
+            else:
+                # Coerce numeric values
+                coerced = _coerce_value(value, field_type)
+                clauses.append({"term": {resolved_field: coerced}})
+        elif operator in (":>", ">"):
+            clauses.append({"range": {resolved_field: {"gt": _coerce_value(value, field_type)}}})
+        elif operator in (":>=", ">="):
+            clauses.append({"range": {resolved_field: {"gte": _coerce_value(value, field_type)}}})
+        elif operator in (":<", "<"):
+            clauses.append({"range": {resolved_field: {"lt": _coerce_value(value, field_type)}}})
+        elif operator in (":<=", "<="):
+            clauses.append({"range": {resolved_field: {"lte": _coerce_value(value, field_type)}}})
+        elif operator in (":!", "!="):
+            if field_type == "text":
+                clauses.append({"bool": {"must_not": [{"match": {resolved_field: value}}]}})
+            else:
+                coerced = _coerce_value(value, field_type)
+                clauses.append({"bool": {"must_not": [{"term": {resolved_field: coerced}}]}})
+        else:
+            return None  # Unsupported operator
+
+    return clauses if clauses else None
+
+
+def _coerce_value(value: str, field_type: str):
+    """Coerce a string value to the appropriate Python type for the field.
+
+    For keyword, date, ip, and version fields, the string is kept as-is
+    since OpenSearch expects string values for those types in term queries.
+    For numeric and boolean fields, we parse to the native Python type
+    so the JSON payload matches what OpenSearch expects.
+    """
+    # Keep string types as strings — OpenSearch handles them natively
+    if field_type in _KEYWORD_FIELD_TYPES or field_type in ("date", "date_nanos", "ip", "version"):
+        return value
+    # For all other types (numeric, boolean, unsigned_long), attempt JSON parsing
+    # which naturally handles int, float, true/false without per-type branches
+    try:
+        parsed = json.loads(value.lower() if value.lower() in ("true", "false") else value)
+        if isinstance(parsed, (bool, int, float)):
+            return parsed
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return value
+
+
+def _build_structured_filter(clauses: list[dict]) -> dict:
+    """Build an OpenSearch query from parsed structured clauses."""
+    if len(clauses) == 1:
+        return clauses[0]
+    return {"bool": {"must": clauses}}
+
+
+# ---------------------------------------------------------------------------
 # Query builders
 # ---------------------------------------------------------------------------
 def _build_default_lexical_query(query: str, fields: list[str]) -> dict:
@@ -473,6 +584,11 @@ def generate_suggestions(
                 val = doc.get(kf)
                 if val is None:
                     continue
+                # For array fields, use the first element
+                if isinstance(val, list):
+                    val = val[0] if val else None
+                    if val is None:
+                        continue
                 val_str = str(val).strip()
                 if val_str and len(val_str) < 60:
                     _add(f"{kf}:{val_str}", "structured", "FILTER", field=kf)
@@ -488,6 +604,10 @@ def generate_suggestions(
                 kf_val = doc.get(kf)
                 if kf_val is None:
                     continue
+                if isinstance(kf_val, list):
+                    kf_val = kf_val[0] if kf_val else None
+                    if kf_val is None:
+                        continue
                 kf_val_str = str(kf_val).strip()
                 if title_val and kf_val_str and len(kf_val_str) < 40:
                     words = title_val.split()[:3]
@@ -776,6 +896,7 @@ def _introspect_search_config(client: OpenSearch, index_name: str) -> dict:
     return {
         "strategy": strategy,
         "lexical_fields": lexical_fields,
+        "field_specs": field_specs,
         "vector_field": vector_field,
         "vector_type": "sparse" if has_sparse else "dense",
         "model_id": model_id,
@@ -788,15 +909,20 @@ def _introspect_search_config(client: OpenSearch, index_name: str) -> dict:
 def _build_search_query(config: dict, query_text: str, size: int, memory_id: str = "") -> dict:
     """Build the search query clause from a search config and query text.
 
-    The same query structure is used for ALL query types (exact, fuzzy,
-    semantic, autocomplete) because the index's pipeline configuration
-    handles scoring and normalization.
+    If the query matches a structured pattern (field:value), build a term/range
+    query. Otherwise, use the configured strategy (BM25, hybrid, neural, etc.).
     """
     strategy = config.get("strategy", "bm25")
     lexical_fields = config.get("lexical_fields", ["*"])
     vector_field = config.get("vector_field", "")
     vector_type = config.get("vector_type", "sparse")
     model_id = config.get("model_id", "")
+    field_specs = config.get("field_specs", {})
+
+    # Try structured query parsing first (field:value, field:>value, etc.)
+    structured_clauses = _parse_structured_query(query_text, field_specs)
+    if structured_clauses is not None:
+        return _build_structured_filter(structured_clauses)
 
     lexical = _build_default_lexical_query(query_text, lexical_fields)
 

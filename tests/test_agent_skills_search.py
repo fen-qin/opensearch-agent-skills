@@ -36,6 +36,9 @@ from lib.search import (
     clear_search_config,
     _search_configs,
     _agent_prompts_cache,
+    _parse_structured_query,
+    _coerce_value,
+    _build_structured_filter,
 )
 
 
@@ -1312,3 +1315,372 @@ def test_search_ui_search_non_agentic_no_retry_on_zero_hits():
     result = search_ui_search(client, "idx", "hello world")
     assert call_count == 1, "Non-agentic search should not retry"
     assert len(result["hits"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# _parse_structured_query
+# ---------------------------------------------------------------------------
+def test_parse_structured_query_single_keyword_match():
+    specs = {"genre": {"type": "keyword", "normalizer": ""}}
+    clauses = _parse_structured_query("genre:Action", specs)
+
+    assert clauses == [{"term": {"genre": "Action"}}]
+
+
+def test_parse_structured_query_integer_field():
+    specs = {"year": {"type": "integer", "normalizer": ""}}
+    clauses = _parse_structured_query("year:1999", specs)
+
+    assert clauses == [{"term": {"year": 1999}}]
+
+
+def test_parse_structured_query_range_gt():
+    specs = {"price": {"type": "float", "normalizer": ""}}
+    clauses = _parse_structured_query("price:>9.99", specs)
+
+    assert clauses == [{"range": {"price": {"gt": 9.99}}}]
+
+
+def test_parse_structured_query_range_gte():
+    specs = {"score": {"type": "integer", "normalizer": ""}}
+    clauses = _parse_structured_query("score:>=80", specs)
+
+    assert clauses == [{"range": {"score": {"gte": 80}}}]
+
+
+def test_parse_structured_query_range_lt():
+    specs = {"price": {"type": "float", "normalizer": ""}}
+    clauses = _parse_structured_query("price:<100.0", specs)
+
+    assert clauses == [{"range": {"price": {"lt": 100.0}}}]
+
+
+def test_parse_structured_query_range_lte():
+    specs = {"year": {"type": "integer", "normalizer": ""}}
+    clauses = _parse_structured_query("year:<=2020", specs)
+
+    assert clauses == [{"range": {"year": {"lte": 2020}}}]
+
+
+def test_parse_structured_query_negation_keyword():
+    specs = {"status": {"type": "keyword", "normalizer": ""}}
+    clauses = _parse_structured_query("status:!archived", specs)
+
+    assert clauses == [{"bool": {"must_not": [{"term": {"status": "archived"}}]}}]
+
+
+def test_parse_structured_query_negation_text():
+    specs = {"title": {"type": "text", "normalizer": ""}}
+    clauses = _parse_structured_query("title:!secret", specs)
+
+    assert clauses == [{"bool": {"must_not": [{"match": {"title": "secret"}}]}}]
+
+
+def test_parse_structured_query_text_field_uses_match():
+    specs = {"title": {"type": "text", "normalizer": ""}}
+    clauses = _parse_structured_query("title:hello world", specs)
+
+    assert clauses == [{"match": {"title": "hello world"}}]
+
+
+def test_parse_structured_query_multiple_clauses_AND():
+    specs = {
+        "genre": {"type": "keyword", "normalizer": ""},
+        "year": {"type": "integer", "normalizer": ""},
+    }
+    clauses = _parse_structured_query("genre:Action AND year:>2000", specs)
+
+    assert len(clauses) == 2
+    assert clauses[0] == {"term": {"genre": "Action"}}
+    assert clauses[1] == {"range": {"year": {"gt": 2000}}}
+
+
+def test_parse_structured_query_resolves_keyword_subfield():
+    specs = {
+        "title": {"type": "text", "normalizer": ""},
+        "title.keyword": {"type": "keyword", "normalizer": ""},
+    }
+    clauses = _parse_structured_query("title:The Matrix", specs)
+
+    # Should use text field's match, not .keyword's term
+    assert clauses == [{"match": {"title": "The Matrix"}}]
+
+
+def test_parse_structured_query_falls_back_to_keyword_subfield():
+    # Only .keyword exists, not the base field
+    specs = {"name.keyword": {"type": "keyword", "normalizer": ""}}
+    clauses = _parse_structured_query("name:Alice", specs)
+
+    assert clauses == [{"term": {"name.keyword": "Alice"}}]
+
+
+def test_parse_structured_query_case_insensitive_field():
+    specs = {"Genre": {"type": "keyword", "normalizer": ""}}
+    clauses = _parse_structured_query("genre:Comedy", specs)
+
+    assert clauses == [{"term": {"Genre": "Comedy"}}]
+
+
+def test_parse_structured_query_unknown_field_returns_none():
+    specs = {"title": {"type": "text", "normalizer": ""}}
+    result = _parse_structured_query("unknown_field:value", specs)
+
+    assert result is None
+
+
+def test_parse_structured_query_non_structured_text_returns_none():
+    specs = {"title": {"type": "text", "normalizer": ""}}
+    result = _parse_structured_query("just a natural language query", specs)
+
+    assert result is None
+
+
+def test_parse_structured_query_empty_specs_returns_none():
+    result = _parse_structured_query("field:value", {})
+
+    assert result is None
+
+
+def test_parse_structured_query_unsupported_field_type_returns_none():
+    specs = {"embedding": {"type": "knn_vector", "normalizer": ""}}
+    result = _parse_structured_query("embedding:something", specs)
+
+    assert result is None
+
+
+def test_parse_structured_query_boolean_field():
+    specs = {"is_active": {"type": "boolean", "normalizer": ""}}
+    clauses = _parse_structured_query("is_active:true", specs)
+
+    assert clauses == [{"term": {"is_active": True}}]
+
+
+def test_parse_structured_query_date_field():
+    specs = {"created_at": {"type": "date", "normalizer": ""}}
+    clauses = _parse_structured_query("created_at:2024-01-15", specs)
+
+    assert clauses == [{"term": {"created_at": "2024-01-15"}}]
+
+
+def test_parse_structured_query_equals_operator():
+    specs = {"status": {"type": "keyword", "normalizer": ""}}
+    clauses = _parse_structured_query("status=active", specs)
+
+    assert clauses == [{"term": {"status": "active"}}]
+
+
+def test_parse_structured_query_colon_equals_operator():
+    specs = {"status": {"type": "keyword", "normalizer": ""}}
+    clauses = _parse_structured_query("status:=active", specs)
+
+    assert clauses == [{"term": {"status": "active"}}]
+
+
+# ---------------------------------------------------------------------------
+# _coerce_value
+# ---------------------------------------------------------------------------
+def test_coerce_value_integer():
+    assert _coerce_value("42", "integer") == 42
+
+
+def test_coerce_value_float():
+    assert _coerce_value("3.14", "float") == 3.14
+
+
+def test_coerce_value_boolean_true():
+    assert _coerce_value("true", "boolean") is True
+
+
+def test_coerce_value_boolean_false():
+    assert _coerce_value("false", "boolean") is False
+
+
+def test_coerce_value_keyword_stays_string():
+    assert _coerce_value("42", "keyword") == "42"
+
+
+def test_coerce_value_date_stays_string():
+    assert _coerce_value("2024-01-15", "date") == "2024-01-15"
+
+
+def test_coerce_value_ip_stays_string():
+    assert _coerce_value("192.168.1.1", "ip") == "192.168.1.1"
+
+
+def test_coerce_value_non_numeric_string_stays_string():
+    assert _coerce_value("hello", "integer") == "hello"
+
+
+# ---------------------------------------------------------------------------
+# _build_structured_filter
+# ---------------------------------------------------------------------------
+def test_build_structured_filter_single_clause():
+    clauses = [{"term": {"genre": "Action"}}]
+    result = _build_structured_filter(clauses)
+
+    assert result == {"term": {"genre": "Action"}}
+
+
+def test_build_structured_filter_multiple_clauses():
+    clauses = [
+        {"term": {"genre": "Action"}},
+        {"range": {"year": {"gt": 2000}}},
+    ]
+    result = _build_structured_filter(clauses)
+
+    assert result == {"bool": {"must": clauses}}
+
+
+# ---------------------------------------------------------------------------
+# _build_search_query — structured query integration
+# ---------------------------------------------------------------------------
+def test_build_search_query_structured_takes_precedence():
+    """Structured query should bypass the normal strategy (BM25/hybrid/etc)."""
+    config = {
+        "strategy": "hybrid",
+        "lexical_fields": ["title"],
+        "vector_field": "embedding",
+        "vector_type": "dense",
+        "model_id": "model-1",
+        "field_specs": {
+            "genre": {"type": "keyword", "normalizer": ""},
+            "title": {"type": "text", "normalizer": ""},
+        },
+    }
+    query = _build_search_query(config, "genre:Action", 10)
+
+    # Should produce a term query, not a hybrid query
+    assert query == {"term": {"genre": "Action"}}
+
+
+def test_build_search_query_non_structured_uses_strategy():
+    """Non-structured text should use the configured strategy."""
+    config = {
+        "strategy": "bm25",
+        "lexical_fields": ["title"],
+        "field_specs": {
+            "title": {"type": "text", "normalizer": ""},
+        },
+    }
+    query = _build_search_query(config, "hello world", 10)
+
+    assert "multi_match" in query
+
+
+def test_build_search_query_structured_with_range():
+    config = {
+        "strategy": "bm25",
+        "lexical_fields": ["title"],
+        "field_specs": {
+            "price": {"type": "float", "normalizer": ""},
+        },
+    }
+    query = _build_search_query(config, "price:>50.0", 10)
+
+    assert query == {"range": {"price": {"gt": 50.0}}}
+
+
+def test_build_search_query_structured_multi_clause():
+    config = {
+        "strategy": "bm25",
+        "lexical_fields": ["title"],
+        "field_specs": {
+            "genre": {"type": "keyword", "normalizer": ""},
+            "year": {"type": "integer", "normalizer": ""},
+        },
+    }
+    query = _build_search_query(config, "genre:Action AND year:>2000", 10)
+
+    assert query == {"bool": {"must": [
+        {"term": {"genre": "Action"}},
+        {"range": {"year": {"gt": 2000}}},
+    ]}}
+
+
+def test_build_search_query_no_field_specs_skips_structured():
+    """Without field_specs in config, structured parsing is skipped."""
+    config = {
+        "strategy": "bm25",
+        "lexical_fields": ["title"],
+        # No field_specs key
+    }
+    query = _build_search_query(config, "genre:Action", 10)
+
+    # Should fall through to lexical since no field_specs
+    assert "multi_match" in query
+
+
+# ---------------------------------------------------------------------------
+# generate_suggestions — array field handling
+# ---------------------------------------------------------------------------
+def test_generate_suggestions_handles_array_values():
+    """Array values in keyword fields should use first element for suggestions."""
+    client = _FakeClient(search_response={
+        "hits": {
+            "hits": [
+                {"_source": {"title": "The Matrix movie classic", "tags": ["action", "sci-fi"]}},
+                {"_source": {"title": "Inception is mind bending", "tags": ["thriller", "sci-fi"]}},
+                {"_source": {"title": "The Godfather classic film", "tags": ["drama", "crime"]}},
+                {"_source": {"title": "Pulp Fiction great movie", "tags": ["crime", "drama"]}},
+                {"_source": {"title": "Forrest Gump heartwarming", "tags": ["drama", "comedy"]}},
+                {"_source": {"title": "The Dark Knight rises", "tags": ["action", "thriller"]}},
+            ],
+            "total": {"value": 6},
+        },
+        "took": 1,
+    })
+
+    class _FakeIndices:
+        def get_mapping(self, index):
+            return {"movies": {"mappings": {"properties": {
+                "title": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
+                "tags": {"type": "keyword"},
+            }}}}
+        def get_settings(self, index):
+            return {"movies": {"settings": {"index": {}}}}
+
+    client.indices = _FakeIndices()
+
+    result = generate_suggestions(client, "movies", max_count=8)
+
+    # Should have structured suggestions that use a single tag value, not "[action, sci-fi]"
+    structured = [s for s in result["suggestions"] if s["capability"] == "structured"]
+    for s in structured:
+        assert "[" not in s["text"], f"Array not unwrapped in suggestion: {s['text']}"
+
+
+def test_generate_suggestions_handles_empty_array():
+    """Empty array values should be skipped in suggestions."""
+    client = _FakeClient(search_response={
+        "hits": {
+            "hits": [
+                {"_source": {"title": "Test Movie One great film", "tags": []}},
+                {"_source": {"title": "Test Movie Two good show", "tags": ["action"]}},
+                {"_source": {"title": "Test Movie Three nice pic", "tags": []}},
+                {"_source": {"title": "Test Movie Four best ever", "tags": []}},
+                {"_source": {"title": "Test Movie Five classic", "tags": []}},
+                {"_source": {"title": "Test Movie Six awesome", "tags": []}},
+            ],
+            "total": {"value": 6},
+        },
+        "took": 1,
+    })
+
+    class _FakeIndices:
+        def get_mapping(self, index):
+            return {"movies": {"mappings": {"properties": {
+                "title": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
+                "tags": {"type": "keyword"},
+            }}}}
+        def get_settings(self, index):
+            return {"movies": {"settings": {"index": {}}}}
+
+    client.indices = _FakeIndices()
+
+    result = generate_suggestions(client, "movies", max_count=8)
+
+    # Should not crash and structured suggestions (if any) should use "action"
+    structured = [s for s in result["suggestions"] if s["capability"] == "structured"]
+    for s in structured:
+        if "tags" in s["text"]:
+            assert "tags:action" in s["text"]
