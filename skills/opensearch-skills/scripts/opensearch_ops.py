@@ -355,6 +355,7 @@ def cmd_check_agentic_setup(args):
         checks["status"].append({"check": "index_exists", "ok": False, "error": str(e)})
 
     # Check 2: Search pipeline attached
+    search_pipeline = ""
     try:
         settings = client.indices.get_settings(index=index)
         idx_settings = settings.get(index, {}).get("settings", {}).get("index", {})

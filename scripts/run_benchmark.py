@@ -67,7 +67,7 @@ Respond in this exact JSON format:
 
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 256,
+        "max_tokens": 512,
         "messages": [{"role": "user", "content": judge_prompt}],
     })
     response_raw = client.invoke_model(
@@ -78,6 +78,11 @@ Respond in this exact JSON format:
     )
     response_body = json.loads(response_raw["body"].read())
     text = response_body["content"][0]["text"]
+    stop_reason = response_body.get("stop_reason", "")
+
+    # Detect truncation — if the model hit max_tokens, the response is incomplete
+    if stop_reason == "max_tokens":
+        return 0.0, f"Judge response truncated (hit max_tokens). Raw: {text[:200]}"
 
     try:
         # Parse JSON from response (handle markdown code blocks)
