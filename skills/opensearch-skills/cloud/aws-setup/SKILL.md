@@ -94,7 +94,8 @@ For Amazon OpenSearch Serverless (AOSS):
 ## Key Rules
 
 - Do not describe **Amazon OpenSearch Serverless** as scaling to zero.
-- **Agentic search** does not deploy to **Amazon OpenSearch Serverless** — use a **managed domain**.
+- **Agentic search** does not deploy to **Serverless V1** — use a **managed domain** or **Serverless V2**.
+- **Serverless V2 (NextGen)** supports only **flow agents** — conversational agents require a managed domain.
 - Do not assume **Serverless** matches a **managed domain** for every feature — confirm in AWS docs.
 - Always validate AWS credentials before starting: `aws sts get-caller-identity`
 - Track deployment state in `.opensearch-deploy-state.json` at the workspace root.
@@ -102,15 +103,21 @@ For Amazon OpenSearch Serverless (AOSS):
 
 ## Deployment Target Selection
 
-| Strategy | Target | Why |
-|---|---|---|
-| `bm25` | Serverless | Simple, no ML models needed |
-| `neural_sparse` | Serverless | Automatic semantic enrichment built-in |
-| `dense_vector` | Serverless | Bedrock connector supported |
-| `hybrid` | Serverless | Combines BM25 + vector on serverless |
-| `agentic` | Domain | Requires agent framework, not available on serverless |
+Default deployment target is **Serverless NextGen** for all strategies except conversational agentic search. Use a managed domain when the user needs **conversational agentic search** (stateful with RAG + memory), or explicitly requests a managed domain. Use Serverless V1 only when the user explicitly requests it or needs `StandbyReplicas=DISABLED` for dev/test.
+
+| Strategy | Target | Collection Type | Why |
+|---|---|---|---|
+| `bm25` | Serverless V2 | SEARCH | Simple, no ML models needed |
+| `neural_sparse` | Serverless V2 | SEARCH | Automatic semantic enrichment built-in |
+| `dense_vector` | Serverless V2 | VECTORSEARCH | GPU-accelerated kNN, Bedrock connector supported |
+| `hybrid` | Serverless V2 | VECTORSEARCH | Combines BM25 + vector with GPU acceleration |
+| `agentic` (flow) | Serverless V2 | SEARCH | Stateless query planning, low latency, managed infra |
+| `agentic` (conversational) | Domain | — | Stateful with RAG + memory, multi-turn conversations |
+| Any (V1 requested) | Serverless V1 | — | Standard SDK, `StandbyReplicas=DISABLED` for dev/test |
 
 ## Workflow
+
+Follow the guides linked in the table above, in order:
 
 ### Step 1 — Provision Infrastructure
 
@@ -126,10 +133,12 @@ For Amazon OpenSearch Serverless (AOSS):
 | Serverless collection | [aoss/serverless-02-deploy-search.md](aoss/serverless-02-deploy-search.md) |
 | Managed domain | [aos/domain-02-deploy-search.md](aos/domain-02-deploy-search.md) |
 
-### Step 3 — Configure Agentic Search (domain only)
+### Step 3 — Configure Agentic Search (if applicable)
 
-Only for agentic search on managed domains:
-- [aos/domain-03-agentic-setup.md](aos/domain-03-agentic-setup.md)
+| Target | Guide |
+|---|---|
+| Conversational Agent Search | [aos/domain-03-agentic-setup.md](aos/domain-03-agentic-setup.md) |
+| Flow Agent Search | [aoss/serverless-04-agentic-setup.md](aoss/serverless-04-agentic-setup.md) |
 
 ### Step 4 — Connect Search UI
 

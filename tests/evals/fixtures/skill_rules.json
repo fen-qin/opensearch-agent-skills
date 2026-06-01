@@ -96,12 +96,36 @@
     "rationale": "Key rule: always validate AWS credentials before starting"
   },
   {
-    "id": "aws-setup-no-agentic-on-serverless",
+    "id": "aws-setup-no-agentic-on-serverless-non-nextgen",
     "skill": "aws-setup",
-    "prompt": "I want to deploy agentic search to Amazon OpenSearch Serverless",
-    "rule": "Must warn that agentic search requires a managed domain, not Serverless",
-    "criteria": "The response must clearly state that agentic search cannot be deployed to Amazon OpenSearch Serverless and requires a managed domain instead. It must not suggest Serverless is a valid deployment target for agentic search.",
-    "rationale": "Key rule: agentic search does not deploy to Amazon OpenSearch Serverless"
+    "prompt": "I want to deploy agentic search to Amazon OpenSearch Serverless non-nextgen",
+    "rule": "Must warn that agentic search does not deploy to Serverless non-nextgen",
+    "criteria": "The response must clearly state that agentic search cannot be deployed to Serverless non-nextgen. It should suggest using a managed domain or Serverless non-nextgen instead. It must not suggest non-nextgen is a valid target for agentic search.",
+    "rationale": "Key rule: agentic search does not deploy to Serverless non-nextgen"
+  },
+  {
+    "id": "aws-setup-flow-agent-on-nextgen",
+    "skill": "aws-setup",
+    "prompt": "I want to set up agentic search with a flow agent on Serverless nextgen",
+    "rule": "Must confirm nextgen supports flow agents and provide the correct deployment path",
+    "criteria": "The response must confirm that Serverless nextgen supports flow agents for agentic search. It should reference provisioning a nextgen collection (SEARCH type) and the agentic setup guide. It must not say agentic search is unavailable on serverless.",
+    "rationale": "nextgen supports flow agents natively — the skill should route correctly"
+  },
+  {
+    "id": "aws-setup-conversational-agent-needs-domain",
+    "skill": "aws-setup",
+    "prompt": "I want to deploy conversational agentic search with memory to AWS. What are my options?",
+    "rule": "Must state that conversational agents require a managed domain",
+    "criteria": "The response must clearly state that conversational agents (with memory/RAG) require a managed domain and are not supported on Serverless nextgen. It should explain that nextgen only supports flow agents (stateless). It must not suggest deploying conversational agents to serverless.",
+    "rationale": "Key rule: nextgen supports only flow agents — conversational requires managed domain"
+  },
+  {
+    "id": "aws-setup-collection-type-for-dense-vector",
+    "skill": "aws-setup",
+    "prompt": "I want to deploy dense vector search to Serverless V2. What collection type should I use?",
+    "rule": "Must recommend VECTORSEARCH collection type for dense vector",
+    "criteria": "The response must state that dense vector search requires a VECTORSEARCH collection type on Serverless V2. It must not suggest using a SEARCH type collection for dense vector or kNN workloads.",
+    "rationale": "Collection type constraint: VECTORSEARCH needed for dense/hybrid, SEARCH for BM25/sparse/agentic"
   },
   {
     "id": "aws-setup-no-serverless-scale-to-zero",
@@ -198,5 +222,13 @@
     "rule": "Must show a confirmation prompt listing resources before deleting",
     "criteria": "The response must list the resources that will be deleted and require explicit user confirmation (typing the group name) before executing any delete commands. It must not proceed with deletion without showing what will be removed and getting confirmation.",
     "rationale": "Deprovision flow requires typed confirmation of group name before destructive actions"
+  },
+  {
+    "id": "aws-setup-full-flow-agent-workflow",
+    "skill": "aws-setup",
+    "prompt": "I want to deploy flow agent agentic search for a collection called my-search-app in us-east-1. Provision the infrastructure, deploy the agent search, test it, then show me how to clean up. Show the full workflow with exact commands and API calls.",
+    "rule": "Must show the full chained workflow: provision → deploy agent (with data access policy for model/agent) → test → deprovision",
+    "criteria": "The response must show the complete workflow in order: 1) Credential validation with aws sts get-caller-identity, 2) Collection provisioning including encryption policy, network policy, collection group with NextGen/v2, and the correct collection type auto-selected for agentic search (SEARCH), 3) Data access policy that grants the connector IAM role access to all four ResourceTypes (collection, index, model, agent) — this is critical for pipeline-based agentic queries to work, 4) Model registration with inline Bedrock connector returning a model_id, 5) Flow agent creation using that model_id in QueryPlanningTool, 6) Search pipeline creation with agentic_query_translator using the agent_id, 7) An agentic search query test using the pipeline, 8) Deprovision/cleanup steps that remove resources in reverse dependency order. All steps must be present and correctly chained — outputs from earlier steps must feed into later steps. The collection type and model must not be explicitly told by the user — the skill must determine them from the strategy.",
+    "rationale": "Validates the skill can guide an agent through the full lifecycle with correct collection type detection and the critical data access policy for model/agent permissions"
   }
 ]
