@@ -1,4 +1,4 @@
-# Amazon OpenSearch Serverless V2 — Configure Flow Agent Search
+# Amazon OpenSearch Serverless NextGen — Configure Flow Agent Search
 
 This guide configures flow agent agentic search on a V2 serverless collection.
 

@@ -94,8 +94,8 @@ For Amazon OpenSearch Serverless (AOSS):
 ## Key Rules
 
 - Do not describe **Amazon OpenSearch Serverless** as scaling to zero.
-- **Agentic search** does not deploy to **Serverless V1** — use a **managed domain** or **Serverless V2**.
-- **Serverless V2 (NextGen)** supports only **flow agents** — conversational agents require a managed domain.
+- **Agentic search** does not deploy to **Serverless V1** — use a **managed domain** or **Serverless NextGen**.
+- **Serverless NextGen (V2)** supports only **flow agents** — conversational agents require a managed domain.
 - Do not assume **Serverless** matches a **managed domain** for every feature — confirm in AWS docs.
 - Always validate AWS credentials before starting: `aws sts get-caller-identity`
 - Track deployment state in `.opensearch-deploy-state.json` at the workspace root.
@@ -107,11 +107,11 @@ Default deployment target is **Serverless NextGen** for all strategies except co
 
 | Strategy | Target | Collection Type | Why |
 |---|---|---|---|
-| `bm25` | Serverless V2 | SEARCH | Simple, no ML models needed |
-| `neural_sparse` | Serverless V2 | SEARCH | Automatic semantic enrichment built-in |
-| `dense_vector` | Serverless V2 | VECTORSEARCH | GPU-accelerated kNN, Bedrock connector supported |
-| `hybrid` | Serverless V2 | VECTORSEARCH | Combines BM25 + vector with GPU acceleration |
-| `agentic` (flow) | Serverless V2 | SEARCH | Stateless query planning, low latency, managed infra |
+| `bm25` | Serverless NextGen | SEARCH | Simple, no ML models needed |
+| `neural_sparse` | Serverless NextGen | SEARCH | Automatic semantic enrichment built-in |
+| `dense_vector` | Serverless NextGen | VECTORSEARCH | GPU-accelerated kNN, Bedrock connector supported |
+| `hybrid` | Serverless NextGen | VECTORSEARCH | Combines BM25 + vector with GPU acceleration |
+| `agentic` (flow) | Serverless NextGen | SEARCH | Stateless query planning, low latency, managed infra |
 | `agentic` (conversational) | Domain | — | Stateful with RAG + memory, multi-turn conversations |
 | Any (V1 requested) | Serverless V1 | — | Standard SDK, `StandbyReplicas=DISABLED` for dev/test |
 
