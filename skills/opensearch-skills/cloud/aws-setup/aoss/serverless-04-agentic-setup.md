@@ -29,7 +29,8 @@ aws iam create-role --role-name opensearch-bedrock-agent-role --assume-role-poli
     "Effect": "Allow",
     "Principal": { "Service": [
       "opensearchservice.amazonaws.com",
-      "aoss.amazonaws.com"
+      "aoss.amazonaws.com",
+      "global.prod.oasis.aoss.aws.internal"
     ]},
     "Action": "sts:AssumeRole"
   }]
@@ -46,7 +47,10 @@ aws iam put-role-policy --role-name opensearch-bedrock-agent-role \
     "Statement": [{
       "Effect": "Allow",
       "Action": "bedrock:InvokeModel",
-      "Resource": "arn:aws:bedrock:*::foundation-model/anthropic.claude-*"
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:*:*:inference-profile/*"
+      ]
     }]
   }'
 ```
@@ -140,14 +144,33 @@ Update state: `"search_pipeline_name": "agentic-search-pipeline"`
 
 ### Critical: Data Access Policy for Pipeline Search
 
-The IAM role used in the model connector's `credential.roleArn` (e.g., `bedrock-invocation-role`) **MUST** be added as a principal in the data access policy with access to all four ResourceTypes (`collection`, `index`, `model`, `agent`).
+The IAM role used in the model connector's `credential.roleArn` **MUST** be added as a principal in the data access policy with access to all four ResourceTypes (`collection`, `index`, `model`, `agent`).
 
 When the search pipeline invokes the agent internally, AOSS uses the connector's IAM role to:
 1. Read index mappings (requires `index` access)
 2. Execute the generated DSL query (requires `index` access)
 3. Invoke the model (requires `model` access)
+4. Execute the agent (requires `agent` access)
 
 Without this, pipeline-based `agentic` queries will fail with `403 Forbidden` even though direct `_execute` API calls work (because direct calls use the caller's identity).
+
+Required data access policy (set during provisioning or update now):
+
+```bash
+aws opensearchserverless create-access-policy --type data \
+  --name <collection-name>-access-policy \
+  --policy '[{
+    "Rules": [
+      {"Resource": ["collection/<collection-name>"], "Permission": ["aoss:*"], "ResourceType": "collection"},
+      {"Resource": ["index/<collection-name>/*"], "Permission": ["aoss:*"], "ResourceType": "index"},
+      {"Resource": ["model/<collection-name>/*"], "Permission": ["aoss:*"], "ResourceType": "model"},
+      {"Resource": ["agent/<collection-name>/*"], "Permission": ["aoss:*"], "ResourceType": "agent"}
+    ],
+    "Principal": ["<caller-principal-arn>", "<iam_role_arn>"]
+  }]' --region <aws_region>
+```
+
+Both the caller's principal (for manual API calls) and the connector IAM role (for pipeline-based invocation) must be listed as principals.
 
 ## Step 5: Test Agentic Search
 
