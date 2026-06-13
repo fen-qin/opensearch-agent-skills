@@ -93,9 +93,7 @@ For Amazon OpenSearch Serverless (AOSS):
 
 ## Key Rules
 
-- Do not describe **Amazon OpenSearch Serverless** as scaling to zero.
-- **Agentic search** does not deploy to **Serverless V1** — use a **managed domain** or **Serverless NextGen**.
-- **Serverless NextGen (V2)** supports only **flow agents** — conversational agents require a managed domain.
+- **Serverless NextGen** supports only **flow agents** — conversational agents require a **managed domain**.
 - Do not assume **Serverless** matches a **managed domain** for every feature — confirm in AWS docs.
 - Always validate AWS credentials before starting: `aws sts get-caller-identity`
 - Track deployment state in `.opensearch-deploy-state.json` at the workspace root.
@@ -113,7 +111,7 @@ Default deployment target is **Serverless NextGen** for all strategies except co
 | `hybrid` | Serverless NextGen | VECTORSEARCH | Combines BM25 + vector with GPU acceleration |
 | `agentic` (flow) | Serverless NextGen | SEARCH | Stateless query planning, low latency, managed infra |
 | `agentic` (conversational) | Domain | — | Stateful with RAG + memory, multi-turn conversations |
-| Any (V1 requested) | Serverless V1 | — | Standard SDK, `StandbyReplicas=DISABLED` for dev/test |
+| Any (non-NextGen requested) | Serverless | — | Standard SDK, `StandbyReplicas=DISABLED` for dev/test |
 
 ## Workflow
 
