@@ -117,8 +117,6 @@ See [cli-reference.md](../../cli-reference.md) for the full command reference.
 - Show architecture proposals to the user before execution.
 - Follow the phases **in order** — do not jump ahead.
 - When a step fails, present the error and wait for guidance.
-- Do not describe **Amazon OpenSearch Serverless** as scaling to zero.
-- **Agentic search** does not deploy to **Amazon OpenSearch Serverless** — use a **managed domain**.
 
 ## Workflow Phases
 
