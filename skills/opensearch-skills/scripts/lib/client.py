@@ -406,21 +406,28 @@ def create_remote_client(
     aws_region: str = "",
     aws_service: str = "",
 ) -> OpenSearch:
+    # AWS path: boto3 reads credentials from environment (AWS_PROFILE, env vars, etc.)
+    if aws_region and aws_service:
+        import boto3
+        from opensearchpy import AWSV4SignerAuth, RequestsHttpConnection
+        session = boto3.Session(region_name=aws_region)
+        credentials = session.get_credentials()
+        return OpenSearch(
+            hosts=[{"host": endpoint, "port": 443}],
+            http_auth=AWSV4SignerAuth(credentials, aws_region, aws_service),
+            use_ssl=True,
+            verify_certs=True,
+            ssl_show_warn=False,
+            connection_class=RequestsHttpConnection,
+        )
+
+    # Basic auth or no-auth path
     kwargs: dict = {
         "hosts": [{"host": endpoint, "port": port}],
         "use_ssl": use_ssl,
         "verify_certs": use_ssl,
         "ssl_show_warn": False,
     }
-
-    if aws_region and aws_service:
-        import boto3
-        from opensearchpy import AWSV4SignerAuth, RequestsHttpConnection
-        session = boto3.Session()
-        credentials = session.get_credentials()
-        kwargs["http_auth"] = AWSV4SignerAuth(credentials, aws_region, aws_service)
-        kwargs["connection_class"] = RequestsHttpConnection
-    elif username and password:
+    if username and password:
         kwargs["http_auth"] = (username, password)
-
     return OpenSearch(**kwargs)
