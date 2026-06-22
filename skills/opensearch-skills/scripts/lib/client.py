@@ -56,11 +56,16 @@ def resolve_http_auth() -> tuple[str, str] | None:
 
 
 def build_client(use_ssl: bool, http_auth: tuple[str, str] | None = None) -> OpenSearch:
+    # This client targets local Docker dev clusters. TLS verification is
+    # disabled only for loopback hosts (self-signed certs). For non-loopback
+    # hosts, verify certificates to prevent MITM credential theft.
+    is_local = OPENSEARCH_HOST in ("localhost", "127.0.0.1", "::1") or OPENSEARCH_HOST.startswith("127.")
+    verify = use_ssl and not is_local
     kwargs = {
         "hosts": [{"host": OPENSEARCH_HOST, "port": OPENSEARCH_PORT}],
         "use_ssl": use_ssl,
-        "verify_certs": False,
-        "ssl_show_warn": False,
+        "verify_certs": verify,
+        "ssl_show_warn": verify,
         "timeout": 60,
     }
     if http_auth is not None:
