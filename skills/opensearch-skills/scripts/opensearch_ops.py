@@ -181,10 +181,13 @@ def cmd_cleanup(args):
 
 
 def cmd_read_knowledge(args):
-    knowledge_dir = os.path.join(
-        os.path.dirname(__file__), "..", "references", "knowledge"
+    knowledge_dir = os.path.realpath(
+        os.path.join(os.path.dirname(__file__), "..", "references", "knowledge")
     )
-    target = os.path.join(knowledge_dir, args.file)
+    target = os.path.realpath(os.path.join(knowledge_dir, args.file))
+    if not target.startswith(knowledge_dir + os.sep) and target != knowledge_dir:
+        print(f"Error: path escapes knowledge directory: {args.file}", file=sys.stderr)
+        sys.exit(1)
     if not os.path.isfile(target):
         available = os.listdir(knowledge_dir) if os.path.isdir(knowledge_dir) else []
         print(f"File not found: {args.file}. Available: {available}", file=sys.stderr)
