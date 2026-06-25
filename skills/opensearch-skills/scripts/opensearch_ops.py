@@ -20,8 +20,7 @@ Commands:
     create-pipeline        Create and attach an ingest/search pipeline
     index-doc              Index a single document
     index-bulk             Bulk index documents from sample data
-    launch-ui              Launch the Search Builder UI
-    connect-ui             Connect Search UI to a remote endpoint
+    launch-ui              Launch the Search Builder UI (local or remote endpoint)
     search                 Run a search query
     load-sample            Load sample data (file, URL, builtin IMDB)
     cleanup                Stop UI and clean up
@@ -123,17 +122,16 @@ def cmd_index_bulk(args):
 
 
 def cmd_launch_ui(args):
-    from lib import client as client_lib
     from lib.ui import launch_ui
 
-    user = (getattr(args, "username", None) or "").strip()
-    pwd = (getattr(args, "password", None) or "").strip()
-    if user and pwd:
-        os.environ[client_lib.OPENSEARCH_AUTH_MODE_ENV] = client_lib.OPENSEARCH_AUTH_MODE_CUSTOM
-        os.environ[client_lib.OPENSEARCH_USER_ENV] = user
-        os.environ[client_lib.OPENSEARCH_PASSWORD_ENV] = pwd
-
-    result = launch_ui(args.index or "")
+    result = launch_ui(
+        index_name=args.index or "",
+        endpoint=args.endpoint or "",
+        aws_region=args.aws_region or "",
+        aws_service=args.aws_service or "",
+        username=args.username or "",
+        password=args.password or "",
+    )
     print(result)
     if "started" in result.lower() or "running" in result.lower():
         # Keep process alive while UI is running
@@ -144,20 +142,6 @@ def cmd_launch_ui(args):
                 time.sleep(1)
         except KeyboardInterrupt:
             print("\nStopping UI server.", file=sys.stderr)
-
-
-def cmd_connect_ui(args):
-    from lib.ui import connect_ui
-    print(connect_ui(
-        endpoint=args.endpoint,
-        port=args.port,
-        use_ssl=not args.no_ssl,
-        username=args.username or "",
-        password=args.password or "",
-        aws_region=args.aws_region or "",
-        aws_service=args.aws_service or "",
-        index_name=args.index or "",
-    ))
 
 
 def cmd_search(args):
@@ -389,27 +373,11 @@ def main():
     # launch-ui
     p = sub.add_parser("launch-ui", help="Launch Search Builder UI")
     p.add_argument("--index", default="")
-    p.add_argument(
-        "--username",
-        default="",
-        help="OpenSearch username (sets custom auth for this process; same as OPENSEARCH_USER)",
-    )
-    p.add_argument(
-        "--password",
-        default="",
-        help="OpenSearch password (sets custom auth for this process; same as OPENSEARCH_PASSWORD)",
-    )
-
-    # connect-ui
-    p = sub.add_parser("connect-ui", help="Connect UI to remote endpoint")
-    p.add_argument("--endpoint", required=True)
-    p.add_argument("--port", type=int, default=443)
-    p.add_argument("--no-ssl", action="store_true")
-    p.add_argument("--username", default="")
-    p.add_argument("--password", default="")
-    p.add_argument("--aws-region", default="")
-    p.add_argument("--aws-service", default="")
-    p.add_argument("--index", default="")
+    p.add_argument("--endpoint", default="", help="Remote endpoint host (omit for local cluster)")
+    p.add_argument("--aws-region", default="", help="AWS region (enables SigV4 auth)")
+    p.add_argument("--aws-service", default="", help="AWS service: 'aoss' or 'es'")
+    p.add_argument("--username", default="", help="Basic auth username (non-AWS remote)")
+    p.add_argument("--password", default="", help="Basic auth password (non-AWS remote)")
 
     # search
     p = sub.add_parser("search", help="Run a search query")
@@ -493,7 +461,6 @@ def main():
         "index-doc": cmd_index_doc,
         "index-bulk": cmd_index_bulk,
         "launch-ui": cmd_launch_ui,
-        "connect-ui": cmd_connect_ui,
         "compare-ui": cmd_compare_ui,
         "search": cmd_search,
         "load-sample": cmd_load_sample,

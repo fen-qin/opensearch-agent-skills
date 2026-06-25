@@ -138,14 +138,14 @@ Follow the guides linked in the table above, in order:
 | Conversational Agent Search | [aos/domain-03-agentic-setup.md](aos/domain-03-agentic-setup.md) |
 | Flow Agent Search | [aoss/serverless-04-agentic-setup.md](aoss/serverless-04-agentic-setup.md) |
 
-### Step 4 — Connect Search UI
+### Step 4 — Launch Search UI
 
 ```bash
-uv run python scripts/opensearch_ops.py connect-ui \
+uv run python scripts/opensearch_ops.py launch-ui \
+  --index <index-name> \
   --endpoint <endpoint> \
   --aws-region <region> \
-  --aws-service <es|aoss> \
-  --index <index-name>
+  --aws-service <es|aoss>
 ```
 
 ### Step 5 — Provide Access Information

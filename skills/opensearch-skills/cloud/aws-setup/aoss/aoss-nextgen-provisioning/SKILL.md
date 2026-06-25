@@ -141,9 +141,11 @@ If yes, collect the IAM principal ARN (role or user ARN), then run:
 aws opensearchserverless create-access-policy --cli-input-json '{
   "type": "data",
   "name": "<name>-access-policy",
-  "policy": "[{\"Rules\":[{\"Resource\":[\"collection/<name>\"],\"Permission\":[\"aoss:*\"],\"ResourceType\":\"collection\"},{\"Resource\":[\"index/<name>/*\"],\"Permission\":[\"aoss:*\"],\"ResourceType\":\"index\"}],\"Principal\":[\"<principal-arn>\"]}]"
+  "policy": "[{\"Rules\":[{\"Resource\":[\"collection/<name>\"],\"Permission\":[\"aoss:*\"],\"ResourceType\":\"collection\"},{\"Resource\":[\"index/<name>/*\"],\"Permission\":[\"aoss:*\"],\"ResourceType\":\"index\"},{\"Resource\":[\"model/*/*\"],\"Permission\":[\"aoss:*\"],\"ResourceType\":\"model\"},{\"Resource\":[\"agent/*/*\"],\"Permission\":[\"aoss:*\"],\"ResourceType\":\"agent\"}],\"Principal\":[\"<principal-arn>\"]}]"
 }' --region <region>
 ```
+
+**Important:** The `model` and `agent` resource types are required for semantic enrichment (CreateIndex with `semantic_enrichment`) and for deploying ML models or agents on the collection. The `model/*/*` wildcard pattern is needed because semantic enrichment creates ML connectors at the account level, not scoped to a single collection name. Always include both `model` and `agent` rules.
 
 ### Success Output
 
