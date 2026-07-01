@@ -1,4 +1,9 @@
 name: Backport
+
+# Security note: This workflow uses pull_request_target but does NOT check out
+# PR code. It only runs after a PR is merged (github.event.pull_request.merged)
+# and uses a GitHub App token to create backport PRs from already-merged commits.
+# Risk is minimal: no untrusted code execution occurs in this workflow.
 on:
   pull_request_target:
     types:

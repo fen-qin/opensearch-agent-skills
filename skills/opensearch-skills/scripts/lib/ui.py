@@ -101,9 +101,25 @@ def _resolve_asset(path: str) -> Path | None:
     return None
 
 
+_ALLOWED_HOSTNAMES = ("127.0.0.1", "localhost")
+
+
 class _UIHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass  # Suppress request logging
+
+    def _is_allowed_origin(self) -> str | None:
+        """Return the Origin if it's from a loopback address, else None."""
+        origin = self.headers.get("Origin", "")
+        if not origin:
+            return None
+        try:
+            parsed = urlparse(origin)
+            if parsed.hostname in _ALLOWED_HOSTNAMES:
+                return origin
+        except Exception:
+            pass
+        return None
 
     def _send_json(self, data: dict, status: int = 200):
         body = json.dumps(data, default=str, ensure_ascii=False).encode("utf-8")
@@ -111,15 +127,23 @@ class _UIHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self._is_allowed_origin()
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.end_headers()
         self.wfile.write(body)
 
     def do_OPTIONS(self):
+        origin = self._is_allowed_origin()
+        if not origin:
+            self.send_error(403, "Forbidden: origin not allowed")
+            return
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", origin)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Vary", "Origin")
         self.end_headers()
 
     def do_GET(self):
