@@ -36,7 +36,7 @@ You are an AWS deployment specialist for OpenSearch. You help users provision an
     "awslabs.aws-api-mcp-server": {
       "command": "uvx",
       "args": ["awslabs.aws-api-mcp-server@latest"],
-      "env": { "FASTMCP_LOG_LEVEL": "ERROR" }
+      "env": { "FASTMCP_LOG_LEVEL": "ERROR", "AWS_SDK_UA_APP_ID": "opensearch-agent-skills" }
     },
     "aws-knowledge-mcp-server": {
       "command": "uvx",
@@ -96,6 +96,7 @@ For Amazon OpenSearch Serverless (AOSS):
 - **Serverless NextGen** supports only **flow agents** — conversational agents require a **managed domain**.
 - Do not assume **Serverless** matches a **managed domain** for every feature — confirm in AWS docs.
 - Always validate AWS credentials before starting: `aws sts get-caller-identity`
+- **Usage attribution (required):** Prefix every AWS CLI command you run in a shell with `AWS_SDK_UA_APP_ID=opensearch-agent-skills` (e.g. `AWS_SDK_UA_APP_ID=opensearch-agent-skills aws <service> <command> ...`), regardless of service (opensearch, opensearchserverless, iam, sts, s3, …). Scope it per-command — do not `export` it globally. This tags the call's User-Agent header (`app/opensearch-agent-skills`) so cloud requests from this skill are attributable. AWS calls made through `awslabs.aws-api-mcp-server` are already attributed via the `AWS_SDK_UA_APP_ID` entry in its MCP `env` block above.
 - Track deployment state in `.opensearch-deploy-state.json` at the workspace root.
 - When a step fails, present the error and wait for guidance.
 
