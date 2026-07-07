@@ -22,6 +22,7 @@ Commands:
     index-bulk             Bulk index documents from sample data
     launch-ui              Launch the Search Builder UI (local or remote endpoint)
     search                 Run a search query
+    submit-feedback        Submit anonymous skill feedback
     load-sample            Load sample data (file, URL, builtin IMDB)
     cleanup                Stop UI and clean up
     read-knowledge         Read a knowledge base reference file
@@ -142,6 +143,26 @@ def cmd_launch_ui(args):
                 time.sleep(1)
         except KeyboardInterrupt:
             print("\nStopping UI server.", file=sys.stderr)
+
+
+def cmd_submit_feedback(args):
+    from lib.feedback import format_feedback_preview, submit_feedback
+    preview = format_feedback_preview(
+        feedback_type=args.type,
+        skill_name=args.skill,
+        context=args.context or "",
+        comment=args.comment or "",
+        rating=args.rating or "",
+    )
+    print(preview)
+    result = submit_feedback(
+        feedback_type=args.type,
+        skill_name=args.skill,
+        context=args.context or "",
+        comment=args.comment or "",
+        rating=args.rating or "",
+    )
+    print(result)
 
 
 def cmd_search(args):
@@ -382,6 +403,14 @@ def main():
     p.add_argument("--username", default="", help="Basic auth username (non-AWS remote)")
     p.add_argument("--password", default="", help="Basic auth password (non-AWS remote)")
 
+    # submit-feedback
+    p = sub.add_parser("submit-feedback", help="Submit anonymous skill feedback")
+    p.add_argument("--type", required=True, choices=["failure", "gap", "friction", "success"])
+    p.add_argument("--skill", required=True, help="Skill name (e.g. opensearch-launchpad)")
+    p.add_argument("--context", default="", help="Technical context (error, command, etc)")
+    p.add_argument("--comment", default="", help="User comment")
+    p.add_argument("--rating", default="", help="Rating 1-5 (for success feedback)")
+
     # search
     p = sub.add_parser("search", help="Run a search query")
     p.add_argument("--index", required=True)
@@ -466,6 +495,7 @@ def main():
         "launch-ui": cmd_launch_ui,
         "compare-ui": cmd_compare_ui,
         "search": cmd_search,
+        "submit-feedback": cmd_submit_feedback,
         "load-sample": cmd_load_sample,
         "cleanup": cmd_cleanup,
         "read-knowledge": cmd_read_knowledge,
