@@ -12,7 +12,12 @@ sys.path.insert(0, str(_SCRIPTS_DIR))
 from lib.samples import (
     _load_records_from_file,
     _infer_text_fields,
+    _is_restricted_ip,
     _validate_url,
+    _build_safe_opener,
+    _RevalidatingRedirectHandler,
+    _ValidatingHTTPConnection,
+    _ValidatingHTTPSConnection,
     load_sample_from_file,
     load_sample_from_paste,
 )
@@ -262,6 +267,122 @@ def test_validate_url_allows_public_ip(monkeypatch):
         lambda *a, **kw: [(None, None, None, None, ("93.184.216.34", 443))],
     )
     _validate_url("https://example.com/data.json")  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# _is_restricted_ip
+# ---------------------------------------------------------------------------
+def test_is_restricted_ip_rejects_loopback():
+    assert _is_restricted_ip("127.0.0.1") is True
+
+
+def test_is_restricted_ip_rejects_private_ranges():
+    assert _is_restricted_ip("10.0.0.1") is True
+    assert _is_restricted_ip("172.16.0.1") is True
+    assert _is_restricted_ip("192.168.1.1") is True
+
+
+def test_is_restricted_ip_rejects_link_local_metadata_endpoint():
+    assert _is_restricted_ip("169.254.169.254") is True
+
+
+def test_is_restricted_ip_rejects_ipv4_mapped_ipv6_metadata():
+    assert _is_restricted_ip("::ffff:169.254.169.254") is True
+
+
+def test_is_restricted_ip_allows_ipv4_mapped_public():
+    assert _is_restricted_ip("::ffff:93.184.216.34") is False
+
+
+def test_is_restricted_ip_rejects_ipv6_loopback_and_link_local():
+    assert _is_restricted_ip("::1") is True
+    assert _is_restricted_ip("fe80::1") is True
+
+
+def test_is_restricted_ip_allows_public_addresses():
+    assert _is_restricted_ip("93.184.216.34") is False
+    assert _is_restricted_ip("2606:2800:220:1:248:1893:25c8:1946") is False
+
+
+# ---------------------------------------------------------------------------
+# _RevalidatingRedirectHandler
+# ---------------------------------------------------------------------------
+def test_redirect_handler_rejects_redirect_to_restricted_address(monkeypatch):
+    def fake_getaddrinfo(host, *_a, **_kw):
+        if host == "attacker-redirect.test":
+            return [(None, None, None, None, ("169.254.169.254", 80))]
+        raise AssertionError(f"unexpected host: {host}")
+
+    monkeypatch.setattr("socket.getaddrinfo", fake_getaddrinfo)
+
+    handler = _RevalidatingRedirectHandler()
+    with pytest.raises(ValueError, match="restricted address"):
+        handler.redirect_request(
+            req=None,
+            fp=None,
+            code=302,
+            msg="Found",
+            headers={},
+            newurl="http://attacker-redirect.test/latest/meta-data/",
+        )
+
+
+def test_redirect_handler_allows_redirect_to_public_address(monkeypatch):
+    import urllib.request
+
+    monkeypatch.setattr(
+        "socket.getaddrinfo",
+        lambda *a, **kw: [(None, None, None, None, ("93.184.216.34", 443))],
+    )
+
+    handler = _RevalidatingRedirectHandler()
+    req = urllib.request.Request("https://example.com/original")
+    result = handler.redirect_request(
+        req=req,
+        fp=None,
+        code=302,
+        msg="Found",
+        headers={},
+        newurl="https://example.com/next",
+    )
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# _ValidatingHTTPConnection / _ValidatingHTTPSConnection
+# ---------------------------------------------------------------------------
+def test_validating_http_connection_rejects_restricted_address_on_connect(monkeypatch):
+    monkeypatch.setattr(
+        "socket.getaddrinfo",
+        lambda *a, **kw: [(None, None, None, None, ("169.254.169.254", 80))],
+    )
+    conn = _ValidatingHTTPConnection("attacker-controlled.test", 80)
+    with pytest.raises(ValueError, match="restricted address"):
+        conn.connect()
+
+
+def test_validating_https_connection_rejects_restricted_address_on_connect(monkeypatch):
+    monkeypatch.setattr(
+        "socket.getaddrinfo",
+        lambda *a, **kw: [(None, None, None, None, ("127.0.0.1", 443))],
+    )
+    conn = _ValidatingHTTPSConnection("attacker-controlled.test", 443)
+    with pytest.raises(ValueError, match="restricted address"):
+        conn.connect()
+
+
+# ---------------------------------------------------------------------------
+# _build_safe_opener
+# ---------------------------------------------------------------------------
+def test_safe_opener_ignores_environment_proxy(monkeypatch):
+    import urllib.request
+
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.internal:8080")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.internal:8080")
+
+    opener = _build_safe_opener()
+
+    assert not any(isinstance(h, urllib.request.ProxyHandler) for h in opener.handlers)
 
 
 # ---------------------------------------------------------------------------
