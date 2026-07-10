@@ -1,6 +1,7 @@
 """Sample data loading for OpenSearch search builder."""
 
 import csv
+import http.client
 import ipaddress
 import json
 import os
@@ -103,26 +104,90 @@ def load_sample_from_file(file_path: str) -> str:
     }, ensure_ascii=False, default=str)
 
 
+def _is_restricted_ip(ip_str: str) -> bool:
+    """True if ip_str is private, loopback, link-local (includes
+    169.254.0.0/16), or otherwise reserved."""
+    addr = ipaddress.ip_address(ip_str)
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+    return (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_reserved
+        or addr.is_unspecified
+        or addr.is_multicast
+    )
+
+
 def _validate_url(url: str) -> None:
-    """Validate URL to prevent SSRF and local file disclosure."""
+    """Only allow http/https URLs whose host resolves to a public address."""
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError(f"URL scheme must be http or https, got: {parsed.scheme!r}")
     hostname = parsed.hostname
     if not hostname:
         raise ValueError("URL must include a hostname")
-    # Resolve hostname and reject private/loopback/link-local addresses
-    for info in socket.getaddrinfo(hostname, parsed.port or 443, proto=socket.IPPROTO_TCP):
-        addr = ipaddress.ip_address(info[4][0])
-        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-            raise ValueError(f"URL resolves to a restricted address: {addr}")
+    try:
+        infos = socket.getaddrinfo(hostname, parsed.port or 443, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        raise ValueError(f"Could not resolve host: {hostname} ({e})")
+    for info in infos:
+        if _is_restricted_ip(info[4][0]):
+            raise ValueError(f"URL resolves to a restricted address: {info[4][0]}")
+
+
+class _RevalidatingConnectionMixin:
+    """Re-checks the resolved address right before connecting."""
+
+    def connect(self):
+        for info in socket.getaddrinfo(self.host, self.port, proto=socket.IPPROTO_TCP):
+            if _is_restricted_ip(info[4][0]):
+                raise ValueError(f"URL resolves to a restricted address: {info[4][0]}")
+        super().connect()
+
+
+class _ValidatingHTTPConnection(_RevalidatingConnectionMixin, http.client.HTTPConnection):
+    pass
+
+
+class _ValidatingHTTPSConnection(_RevalidatingConnectionMixin, http.client.HTTPSConnection):
+    pass
+
+
+class _ValidatingHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_ValidatingHTTPConnection, req)
+
+
+class _ValidatingHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_ValidatingHTTPSConnection, req)
+
+
+class _RevalidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-validates each redirect target before following it."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _validate_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _build_safe_opener() -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _ValidatingHTTPHandler(),
+        _ValidatingHTTPSHandler(),
+        _RevalidatingRedirectHandler(),
+    )
 
 
 def load_sample_from_url(url: str) -> str:
     try:
         _validate_url(url)
         req = urllib.request.Request(url, headers={"User-Agent": "opensearch-skills/1.0"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        opener = _build_safe_opener()
+        with opener.open(req, timeout=30) as resp:
             content = resp.read().decode("utf-8", errors="replace")
 
         # Try JSON
