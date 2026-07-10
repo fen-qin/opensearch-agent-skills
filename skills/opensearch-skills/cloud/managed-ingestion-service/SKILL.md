@@ -5,8 +5,7 @@ description: >
   Service (OSIS) pipelines. Upload pre-generated JSONL chunks to S3 and OSIS
   indexes them — optionally using semantic_enrichment in the sink to create the
   index with ASE automatically. Cloud ingestion — uploading raw PDF/DOCX and
-  letting document_extractor parse them in the cloud — is available via private
-  beta. Use this skill when the user wants to ingest documents into a cloud
+  letting document_extractor parse them in the cloud — is fully supported. Use this skill when the user wants to ingest documents into a cloud
   OpenSearch domain or collection, process documents at full volume beyond local
   limits, or set up an OSIS pipeline. Activate even if the user says OSIS,
   ingestion pipeline, document extraction, S3 ingestion, managed ingestion,
@@ -37,7 +36,7 @@ Amazon OpenSearch Service (AOS) domains and Amazon OpenSearch Serverless (AOSS) 
 | Path | Upload to S3 | OSIS Processor | Status | Best for |
 |------|--------------|----------------|--------|----------|
 | **Local processing** | JSONL chunks (from local Docling) | `parse_json` (pass-through) | **Available now** | Validated locally, deploy at scale |
-| **Cloud ingestion** | Raw PDF/DOCX/PPTX/XLSX | `document_extractor` | **Private beta** | Full cloud processing, no local compute |
+| **Cloud ingestion** | Raw PDF/DOCX/PPTX/XLSX | `document_extractor` | **Available** | Full cloud processing, no local compute |
 
 Both paths support the same sink options — the only difference is source content and processor.
 
@@ -99,16 +98,16 @@ Present both options to the user:
 > I see you have raw PDF documents. There are two ways to process them for ingestion:
 >
 > **Option A — Cloud ingestion (recommended for scale)**
-> Upload your PDFs directly to S3 and let the cloud handle parsing, chunking, and indexing with ASE (automatic sparse embeddings) — no local compute needed. This is currently in private beta.
->
-> 👉 To get access, email **opensearch-agent-skills-interests@amazon.com** with your AWS account ID and region.
+> Upload your PDFs directly to S3 and let the cloud handle parsing, chunking, and indexing
+> with ASE (automatic sparse embeddings) — no local compute needed.
 >
 > **Option B — Local processing (available now)**
-> Process your PDFs locally with Docling to produce JSONL chunks, then upload those to S3 for cloud ingestion. Gives you full control over chunk quality.
+> Process your PDFs locally with Docling to produce JSONL chunks, then upload those to S3
+> for cloud ingestion. Gives you full control over chunk quality.
 >
-> Which would you prefer? (Or if you'd like to get started immediately, I'll go with Option B while you wait for beta access.)
+> Which would you prefer?
 
-- If the user chooses **Option A**: confirm they should email opensearch-agent-skills-interests@amazon.com, and offer to proceed with Option B in the meantime.
+- If the user chooses **Option A**: proceed to Step 4, then use the **Cloud Ingestion pipeline YAML** (with `document_extractor` processor) in Step 7.
 - If the user chooses **Option B**: proceed with [document_processing_guide.md](../../ingest/document-processing/document_processing_guide.md). Once chunks are ready at `.opensearch/chunks/<index>/`, return here and continue to Step 4.
 
 ### Step 4: Gather parameters
@@ -362,12 +361,56 @@ Key points:
 
 ---
 
-## Cloud Ingestion (private beta)
+## Pipeline YAML — Cloud Ingestion (document_extractor)
 
-> **Private beta.** Cloud ingestion lets you upload raw documents (PDF/DOCX) directly to S3
-> and have the OSIS pipeline handle parsing, chunking, and indexing end-to-end — no local
-> compute needed. Contact **opensearch-agent-skills-interests@amazon.com** to onboard.
-> Pipeline YAML will be provided during onboarding.
+Upload raw documents (PDF/DOCX/PPTX/XLSX) to S3 and let OSIS handle parsing, chunking,
+and indexing end-to-end via `document_extractor`.
+
+```yaml
+version: "2"
+<pipeline-name>:
+  source:
+    s3:
+      codec:
+        newline:
+      aws:
+        region: "<region>"
+        sts_role_arn: "<iam-role-arn>"
+      scan:
+        scheduling:
+          interval: PT10S
+        buckets:
+          - bucket:
+              name: "<s3-bucket-name>"
+              data_selection: metadata_only
+              filter:
+                include_prefix:
+                  - <s3-prefix>
+  processor:
+    - document_extractor:
+  sink:
+    - opensearch:
+        hosts: [ "<endpoint>" ]
+        aws:
+          region: "<region>"
+          sts_role_arn: "<iam-role-arn>"
+          semantic_enrichment:
+            fields:
+              - name: "<text-field-name>"
+                language: "english"
+          serverless: true
+          serverless_options:
+            network_policy_name: "<network-policy-name>"
+        index: "<index-name>"
+        index_type: custom
+```
+
+Key points:
+- `data_selection: metadata_only` — passes S3 object references to the processor (not file content)
+- `document_extractor` — parses PDF/DOCX, chunks, produces `text`, `headings`, `source_file`
+- `semantic_enrichment` — creates index with ASE, deploys sparse model automatically
+- `interval: PT10S` — polls for new files every 10 seconds
+- Adjust sink for AOS vs AOSS (remove `serverless` block for AOS domains)
 
 ---
 
