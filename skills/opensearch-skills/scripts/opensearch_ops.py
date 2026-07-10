@@ -345,6 +345,62 @@ def cmd_create_conversational_agent_pipeline(args):
     print(create_conversational_agent_pipeline(args.name, args.agent_id, args.index, args.model_id))
 
 
+def cmd_ingest(args):
+    from lib.ingest import ingest_local, detect_document_profile, PROFILES
+
+    source = args.source
+    index = args.index
+    max_pages = args.max_pages
+    max_tokens = args.max_tokens
+
+    # Resolve profile: None or "auto" → detect; explicit → use directly.
+    profile = args.profile
+    if not profile or profile == "auto":
+        detection = detect_document_profile(source)
+        recommended = detection["profile"]
+        if recommended in PROFILES:
+            profile = recommended
+            note = f"Auto-detected profile '{recommended}' ({detection['confidence']} confidence): {detection['reason']}"
+        else:
+            profile = "semantic"
+            note = (
+                f"Auto-detected '{recommended}' ({detection['reason']}), but that profile "
+                f"is not available yet; using 'semantic'. Re-run with --profile to override."
+            )
+        print(json.dumps({"status": "profile_detected", "detection": detection, "using_profile": profile, "note": note}))
+
+    result = ingest_local(source, index, max_pages=max_pages, max_tokens=max_tokens, profile=profile)
+    print(json.dumps(result, indent=2))
+
+
+def cmd_ingest_status(args):
+    from lib.ingest import read_status
+    status = read_status()
+    print(json.dumps(status or {"active": False}, indent=2))
+
+
+def cmd_eval_document(args):
+    """Emit metrics + a chunk sample for the agent to judge processing quality."""
+    from lib.quality import build_eval_payload
+    payload = build_eval_payload(args.index, max_samples=args.samples)
+    print(json.dumps(payload, indent=2))
+
+
+def cmd_save_quality(args):
+    """Persist the agent's quality verdict (JSON) to the index's _quality.json."""
+    from lib.quality import save_verdict
+    import pathlib
+    if args.verdict_file:
+        verdict = json.loads(pathlib.Path(args.verdict_file).read_text())
+    elif args.verdict:
+        verdict = json.loads(args.verdict)
+    else:
+        print(json.dumps({"error": "Provide --verdict or --verdict-file"}))
+        return
+    save_verdict(args.index, verdict)
+    print(json.dumps({"status": "saved", "index": args.index}))
+
+
 def main():
     parser = argparse.ArgumentParser(description="OpenSearch operations CLI (standalone)", allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -481,6 +537,28 @@ def main():
     p.add_argument("--index", required=True, help="Index name")
     p.add_argument("--model-id", required=True, help="Deployed LLM model ID for RAG")
 
+    # ingest
+    p = sub.add_parser("ingest", help="Process a document: parse and chunk locally (index name auto-derived if omitted)")
+    p.add_argument("--source", required=True, help="Path to source file (PDF, DOCX, etc.)")
+    p.add_argument("--index", default=None, help="Target index name. If omitted, derived from filename.")
+    p.add_argument("--profile", default=None, choices=["auto", "semantic", "tables", "scanned", "multimodal"], help="Processing profile (default: auto-detect)")
+    p.add_argument("--max-pages", type=int, default=10, help="Max pages to process (default: 10)")
+    p.add_argument("--max-tokens", type=int, default=None, help="Max tokens per chunk (default: profile default)")
+
+    # ingest-status
+    sub.add_parser("ingest-status", help="Check ingestion job status")
+
+    # eval-document
+    p = sub.add_parser("eval-document", help="Emit metrics + chunk sample for the agent to judge processing quality")
+    p.add_argument("--index", required=True, help="Index whose local chunks to evaluate")
+    p.add_argument("--samples", type=int, default=8, help="Number of chunk samples to include (default: 8)")
+
+    # save-quality
+    p = sub.add_parser("save-quality", help="Persist the agent's quality verdict (JSON) for an index")
+    p.add_argument("--index", required=True, help="Index to attach the verdict to")
+    p.add_argument("--verdict", default="", help="Verdict as a JSON string")
+    p.add_argument("--verdict-file", default="", help="Path to a JSON file with the verdict")
+
     args = parser.parse_args()
 
     dispatch = {
@@ -506,6 +584,10 @@ def main():
         "create-flow-agentic-pipeline": cmd_create_flow_agentic_pipeline,
         "create-conversational-agent-pipeline": cmd_create_conversational_agent_pipeline,
         "search-docs": cmd_search_docs,
+        "ingest": cmd_ingest,
+        "ingest-status": cmd_ingest_status,
+        "eval-document": cmd_eval_document,
+        "save-quality": cmd_save_quality,
     }
 
     fn = dispatch.get(args.command)

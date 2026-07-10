@@ -70,5 +70,41 @@
     "prompt": "How do I configure IAM roles and SigV4 auth for my OpenSearch domain?",
     "expected_skill": "aws-setup",
     "rationale": "IAM + SigV4 are aws-setup keywords"
+  },
+  {
+    "id": "routing-ingestion-01",
+    "prompt": "I want to ingest my documents into AOSS via an OSIS pipeline from S3",
+    "expected_skill": "managed-ingestion-service",
+    "rationale": "Explicit OSIS + S3 + AOSS ingestion intent"
+  },
+  {
+    "id": "routing-ingestion-02",
+    "prompt": "Set up a managed ingestion pipeline to process PDFs from my S3 bucket into OpenSearch Serverless",
+    "expected_skill": "managed-ingestion-service",
+    "rationale": "Managed ingestion + S3 + AOSS pipeline setup"
+  },
+  {
+    "id": "routing-ingestion-03",
+    "prompt": "How do I use document_extractor with OSIS to ingest documents at scale?",
+    "expected_skill": "managed-ingestion-service",
+    "rationale": "document_extractor + OSIS are managed-ingestion-service keywords"
+  },
+  {
+    "id": "routing-ingestion-04",
+    "prompt": "I have JSONL chunks ready and want to ingest them into my AOS domain using an OSIS pipeline with semantic enrichment",
+    "expected_skill": "managed-ingestion-service",
+    "rationale": "OSIS + AOS domain + semantic_enrichment = managed-ingestion-service"
+  },
+  {
+    "id": "routing-ingestion-05",
+    "prompt": "I need to process my PDF documents into chunks using Docling before ingesting them",
+    "expected_skill": "document-processing",
+    "rationale": "Document processing (Docling) routes to the ingest/document-processing skill"
+  },
+  {
+    "id": "routing-negative-01",
+    "prompt": "Bulk index my product catalog JSON into OpenSearch using the _bulk API",
+    "expected_skill": "opensearch-launchpad",
+    "rationale": "Structured bulk-indexing is NOT managed-ingestion-service — it's opensearch-launchpad"
   }
 ]

@@ -8,12 +8,12 @@
     "rationale": "Phase 1 requires checking cluster status before any other action"
   },
   {
-    "id": "launchpad-no-agentic-on-serverless",
+    "id": "launchpad-agentic-serverless-routing",
     "skill": "opensearch-launchpad",
     "prompt": "I want to set up agentic search and deploy it to Amazon OpenSearch Serverless",
-    "rule": "Must warn that agentic search requires a managed domain, not Serverless",
-    "criteria": "The response must clearly state that agentic search cannot be deployed to Amazon OpenSearch Serverless and requires a managed domain instead. It must not suggest Serverless is a valid target for agentic search.",
-    "rationale": "Key rule: agentic search does not deploy to Amazon OpenSearch Serverless"
+    "rule": "Must distinguish between flow agents (supported on NextGen) and conversational agents (require managed domain)",
+    "criteria": "The response must clarify that flow agents are supported on Serverless NextGen, while conversational agents (with memory/RAG) require a managed domain. It must not blanket-reject agentic search on serverless, nor suggest all agentic types work on serverless.",
+    "rationale": "NextGen supports flow agents; only conversational agents require a managed domain"
   },
   {
     "id": "launchpad-no-serverless-scale-to-zero",
@@ -36,8 +36,8 @@
     "skill": "log-analytics",
     "prompt": "Investigate errors in my application logs",
     "rule": "Must ask which cluster to connect to before doing anything else",
-    "criteria": "The response must ask the user for cluster information — specifically cluster type (local, AOS, or AOSS), endpoint URL, and authentication method — before attempting any discovery, querying, or MCP configuration. It must not assume localhost or any default endpoint.",
-    "rationale": "Phase 1 requires asking for cluster type, endpoint, and auth upfront — agent must not assume localhost"
+    "criteria": "The response must ask the user for cluster information \u2014 specifically cluster type (local, AOS, or AOSS), endpoint URL, and authentication method \u2014 before attempting any discovery, querying, or MCP configuration. It must not assume localhost or any default endpoint.",
+    "rationale": "Phase 1 requires asking for cluster type, endpoint, and auth upfront \u2014 agent must not assume localhost"
   },
   {
     "id": "log-analytics-ask-cluster-aoss",
@@ -45,15 +45,15 @@
     "prompt": "I want to analyze logs stored in my Amazon OpenSearch Serverless collection. Can you help?",
     "rule": "Must ask for the AOSS endpoint URL and authentication method, not assume a default",
     "criteria": "The response must ask for the specific AOSS endpoint URL and how the user authenticates (AWS profile or credentials). It must not assume localhost, a generic endpoint, or skip asking for auth details when the user mentions Amazon OpenSearch Serverless.",
-    "rationale": "AOSS requires a collection-specific endpoint and SigV4 auth — agent must not default to localhost"
+    "rationale": "AOSS requires a collection-specific endpoint and SigV4 auth \u2014 agent must not default to localhost"
   },
   {
     "id": "log-analytics-discovery-first",
     "skill": "log-analytics",
     "prompt": "Write me a PPL query to find all ERROR logs in my application",
-    "rule": "Must not assume field names — must mention discovering the index mapping or schema first",
+    "rule": "Must not assume field names \u2014 must mention discovering the index mapping or schema first",
     "criteria": "The response must not assume specific field names like 'level' or 'log.level'. It must mention the need to discover the index mapping or inspect the schema before writing a query, since field names vary by log source.",
-    "rationale": "Key rule: discovery first — never assume field names"
+    "rationale": "Key rule: discovery first \u2014 never assume field names"
   },
   {
     "id": "log-analytics-ppl-primary",
@@ -77,7 +77,7 @@
     "prompt": "Find all error spans in my trace data",
     "rule": "Must mention discovering trace indices before querying",
     "criteria": "The response must mention discovering or looking for trace indices (such as otel-v1-apm-span-*) before writing any query. It must not jump straight to a query without first addressing index discovery.",
-    "rationale": "Key rule: discovery first — look for otel-v1-apm-span-* indices"
+    "rationale": "Key rule: discovery first \u2014 look for otel-v1-apm-span-* indices"
   },
   {
     "id": "trace-analytics-quote-dotted-fields",
@@ -106,10 +106,18 @@
   {
     "id": "aws-setup-flow-agent-on-nextgen",
     "skill": "aws-setup",
-    "prompt": "I want to set up agentic search with a flow agent on Serverless nextgen",
-    "rule": "Must confirm nextgen supports flow agents and provide the correct deployment path",
-    "criteria": "The response must confirm that Serverless nextgen supports flow agents for agentic search. It should reference provisioning a nextgen collection (SEARCH type) and the agentic setup guide. It must not say agentic search is unavailable on serverless.",
-    "rationale": "nextgen supports flow agents natively — the skill should route correctly"
+    "prompt": "I want to set up agentic search with a flow agent on Serverless nextgen. My index uses BM25 only, no vectors.",
+    "rule": "Must confirm nextgen supports flow agents and use SEARCH collection type for BM25-only agentic",
+    "criteria": "The response must confirm that Serverless nextgen supports flow agents for agentic search. For BM25-only (no vectors), it should reference provisioning a nextgen collection with SEARCH type and the agentic setup guide. It must not say agentic search is unavailable on serverless.",
+    "rationale": "nextgen supports flow agents natively \u2014 SEARCH type when no knn_vector fields"
+  },
+  {
+    "id": "aws-setup-flow-agent-with-vectors-on-nextgen",
+    "skill": "aws-setup",
+    "prompt": "I want to deploy flow agent agentic search to Serverless NextGen. My index has a knn_vector embedding field for neural search.",
+    "rule": "Must use VECTORSEARCH collection type when index has knn_vector fields",
+    "criteria": "The response must recommend VECTORSEARCH collection type because the index has knn_vector fields. It must not suggest SEARCH type when the user explicitly states their index has vector/embedding fields. The flow agent is supported on NextGen regardless of collection type.",
+    "rationale": "Collection type depends on whether index has knn_vector fields \u2014 vectors require VECTORSEARCH"
   },
   {
     "id": "aws-setup-conversational-agent-needs-domain",
@@ -117,7 +125,7 @@
     "prompt": "I want to deploy conversational agentic search with memory to AWS. What are my options?",
     "rule": "Must state that conversational agents require a managed domain",
     "criteria": "The response must clearly state that conversational agents (with memory/RAG) require a managed domain and are not supported on Serverless nextgen. It should explain that nextgen only supports flow agents (stateless). It must not suggest deploying conversational agents to serverless.",
-    "rationale": "Key rule: nextgen supports only flow agents — conversational requires managed domain"
+    "rationale": "Key rule: nextgen supports only flow agents \u2014 conversational requires managed domain"
   },
   {
     "id": "aws-setup-collection-type-for-dense-vector",
@@ -125,7 +133,7 @@
     "prompt": "I want to deploy dense vector search to Serverless NextGen. What collection type should I use?",
     "rule": "Must recommend VECTORSEARCH collection type for dense vector",
     "criteria": "The response must state that dense vector search requires a VECTORSEARCH collection type on Serverless NextGen. It must not suggest using a SEARCH type collection for dense vector or kNN workloads.",
-    "rationale": "Collection type constraint: VECTORSEARCH needed for dense/hybrid, SEARCH for BM25/sparse/agentic"
+    "rationale": "Collection type constraint: VECTORSEARCH needed for dense/hybrid/agentic-with-vectors, SEARCH for BM25/sparse/agentic-without-vectors"
   },
   {
     "id": "aws-setup-no-serverless-scale-to-zero",
@@ -197,7 +205,7 @@
     "prompt": "Set up a VECTORSEARCH collection called embeddings-store in us-east-1 with all required policies",
     "rule": "Must create encryption policy before creating the collection",
     "criteria": "The response must create the encryption policy and network policy before creating the collection group or collection. The correct order is: encryption policy, then network policy, then collection group, then collection. It must not create the collection before its required policies exist.",
-    "rationale": "Collections require encryption and network policies to exist first — wrong order causes failures"
+    "rationale": "Collections require encryption and network policies to exist first \u2014 wrong order causes failures"
   },
   {
     "id": "aoss-provision-valid-ocu-values",
@@ -224,11 +232,99 @@
     "rationale": "Deprovision flow requires typed confirmation of group name before destructive actions"
   },
   {
+    "id": "launchpad-unstructured-default-agentic",
+    "skill": "opensearch-launchpad",
+    "prompt": "I have a PDF document I want to make searchable. Here's the file: ./reports/quarterly.pdf",
+    "rule": "Must default to agentic strategy without asking user to choose",
+    "criteria": "The response must proceed with agentic search (flow agent) as the default strategy for unstructured documents. It must NOT present all five strategies or ask the user to choose. It may mention agentic is the default.",
+    "rationale": "Phase 2: unstructured documents default to agentic \u2014 only ask if user explicitly requests a different strategy"
+  },
+  {
+    "id": "launchpad-unstructured-sparse-enrichment",
+    "skill": "opensearch-launchpad",
+    "prompt": "I ingested a PDF and chunks are ready. Now set up the search pipeline for my index 'research-papers'",
+    "rule": "Must deploy a sparse encoding model and create ingest pipeline with sparse_encoding processor",
+    "criteria": "The response must include deploying a sparse encoding model (e.g., opensearch-neural-sparse-encoding-doc-v2-mini or similar) and creating an ingest pipeline with a sparse_encoding processor that maps the 'text' field to a rank_features field. It must NOT use a dense embedding model (Bedrock Titan) or text_embedding processor for unstructured documents.",
+    "rationale": "document_processing_guide.md step 3: unstructured docs use sparse encoding locally, not dense vector"
+  },
+  {
+    "id": "launchpad-unstructured-cloud-deploy-search-collection",
+    "skill": "opensearch-launchpad",
+    "prompt": "I have a PDF ingested locally with sparse encoding. Now I want to deploy to AWS. What collection type should be provisioned?",
+    "rule": "Must route to SEARCH collection type (not VECTORSEARCH) for sparse enrichment",
+    "criteria": "The response must indicate that a SEARCH collection type should be provisioned on Serverless NextGen. It must NOT suggest VECTORSEARCH \u2014 sparse enrichment via ASE does not require knn_vector fields. The agent should derive this from reading the aws-setup docs where neural_sparse maps to SEARCH collection type.",
+    "rationale": "neural_sparse uses ASE on NextGen SEARCH collections \u2014 no knn_vector fields needed"
+  },
+  {
+    "id": "launchpad-unstructured-cloud-deploy-ase-index",
+    "skill": "opensearch-launchpad",
+    "prompt": "I provisioned a SEARCH collection on Serverless NextGen for my PDF document search. Now create the index with sparse enrichment.",
+    "rule": "Must use CreateIndex API with semantic_enrichment enabled on the text field",
+    "criteria": "The response must use the CreateIndex API (or equivalent) with semantic_enrichment status set to ENABLED on the text field. It must NOT manually deploy a sparse model or create an ingest pipeline on the cloud collection \u2014 ASE handles this automatically on NextGen SEARCH collections.",
+    "rationale": "serverless-02-deploy-search.md Neural Sparse Path: ASE auto-deploys sparse model and pipelines"
+  },
+  {
+    "id": "launchpad-unstructured-cloud-deploy-then-ingest",
+    "skill": "opensearch-launchpad",
+    "prompt": "My SEARCH collection and ASE index are ready on AWS. Now I need to ingest my full PDF document at scale.",
+    "rule": "Must route to managed-ingestion-service using the local-chunking OSIS path",
+    "criteria": "The response must route to the managed-ingestion-service skill for cloud-scale ingestion via an OSIS pipeline. For unstructured documents it must use the local-chunking path — process the document locally (Docling) into chunks, upload the JSONL to S3, and ingest with an OSIS pipeline using the parse_json processor and a semantic_enrichment sink. It must NOT rely on the document_extractor (cloud chunking) processor, which is not yet available; if the user asks for cloud chunking the response should note it is coming soon and use local chunking instead. It must not suggest only local indexing or manual bulk indexing for production cloud ingestion.",
+    "rationale": "Cloud-scale ingestion uses managed-ingestion-service; cloud chunking (document_extractor) is coming soon, so the GA path is local chunking (parse_json) + semantic_enrichment sink"
+  },
+  {
+    "id": "launchpad-flow-agent-embedding-model-id",
+    "skill": "opensearch-launchpad",
+    "prompt": "My index has a knn_vector embedding field. Set up a flow agent for agentic search on this index.",
+    "rule": "Must pass embedding-model-id to both create-flow-agent and create-flow-agentic-pipeline",
+    "criteria": "The response must include passing --embedding-model-id when creating the flow agent (so QueryPlanningTool can generate neural queries) and when creating the flow agentic pipeline (so neural_query_enricher injects the model ID into neural clauses). It must not create the agent or pipeline without the embedding model ID when the index has a knn_vector field.",
+    "rationale": "Without embedding_model_id, the agent generates BM25-only queries and ignores the vector field entirely"
+  },
+  {
+    "id": "aws-setup-dense-vector-data-access-policy",
+    "skill": "aws-setup",
+    "prompt": "Deploy a Bedrock embedding model to my AOSS collection for dense vector search. The collection already has a data access policy with collection and index access.",
+    "rule": "Must update data access policy to add model ResourceType before creating ML connector",
+    "criteria": "The response must update the data access policy to add 'model' ResourceType and the Bedrock IAM role as a principal BEFORE attempting to create the ML connector or register the model. It must not attempt ML operations with only collection+index access, as this will result in a 403 error.",
+    "rationale": "serverless-02-deploy-search.md Step 1b: ML operations require model ResourceType in data access policy"
+  },
+  {
+    "id": "managed-ingestion-osis-role-in-access-policy",
+    "skill": "managed-ingestion-service",
+    "prompt": "Set up an OSIS pipeline to ingest PDFs from S3 into my AOSS collection. The collection already has a data access policy.",
+    "rule": "Must add the OSIS pipeline role to the data access policy as a principal",
+    "criteria": "The response must include updating the AOSS data access policy to add the OSIS pipeline IAM role as a principal with index write access. Without this, the pipeline will fail to write documents to the collection even if it has aoss:APIAccessAll permissions.",
+    "rationale": "managed-ingestion-service SKILL.md: OSIS role must be in data access policy to write to the index"
+  },
+  {
+    "id": "managed-ingestion-cloud-chunking-coming-soon",
+    "skill": "managed-ingestion-service",
+    "prompt": "I want to upload my raw PDFs straight to S3 and have the OSIS document_extractor parse and chunk them in the cloud. Set that up.",
+    "rule": "Must explain cloud chunking is coming soon and guide the user through the local chunking path instead",
+    "criteria": "The response must communicate, in a positive way, that cloud chunking via the document_extractor processor is coming soon / not yet available. It must NOT produce an OSIS pipeline whose processor is document_extractor as a working setup. Instead it should guide the user through the available local chunking path: process the documents locally with Docling, upload the resulting JSONL chunks to S3, and ingest via an OSIS pipeline using parse_json with a semantic_enrichment sink. It should reassure the user this reaches the same indexed result.",
+    "rationale": "managed-ingestion-service SKILL.md: cloud chunking (document_extractor) is coming soon; the agent should steer to the GA local chunking path with positive framing"
+  },
+  {
+    "id": "managed-ingestion-local-chunks-parse-json",
+    "skill": "managed-ingestion-service",
+    "prompt": "I've already chunked my PDFs locally and the JSONL is in .opensearch/chunks/research-papers/. Ingest these into my AOSS collection at scale.",
+    "rule": "Must build an OSIS pipeline that uploads local JSONL chunks to S3 and ingests them with parse_json and a semantic_enrichment sink",
+    "criteria": "The response must use the local chunking path: upload the pre-generated JSONL chunks to S3, then create an OSIS pipeline whose source reads the JSONL (codec newline) and whose processor is parse_json (with delete_entries to drop the injected s3 key), writing to an opensearch sink that uses semantic_enrichment to create the index with ASE automatically. It must NOT use the document_extractor processor, and must NOT manually deploy a sparse model or create a separate ingest pipeline on the collection.",
+    "rationale": "managed-ingestion-service SKILL.md Local Chunking YAML: parse_json reads pre-made chunks; semantic_enrichment sink handles ASE — this is the GA cloud-scale path"
+  },
+  {
+    "id": "managed-ingestion-neural-sparse-semantic-enrichment-sink",
+    "skill": "managed-ingestion-service",
+    "prompt": "Set up the OSIS pipeline sink for neural sparse search when ingesting my local chunks into AOSS.",
+    "rule": "Must configure semantic_enrichment in the OSIS opensearch sink for neural sparse (ASE)",
+    "criteria": "The response must configure the opensearch sink with a semantic_enrichment block (a fields list naming the text field and language) so that ASE creates the index and deploys the sparse model automatically. It must NOT instead manually deploy a sparse encoding model and attach a separate sparse_encoding ingest pipeline on the cloud collection — on AOSS, semantic_enrichment in the sink handles neural sparse enrichment.",
+    "rationale": "managed-ingestion-service SKILL.md: neural sparse on AOSS uses the semantic_enrichment sink (ASE), which is available now"
+  },
+  {
     "id": "aws-setup-full-flow-agent-workflow",
     "skill": "aws-setup",
     "prompt": "I want to deploy flow agent agentic search for a collection called my-search-app in us-east-1. Provision the infrastructure, deploy the agent search, test it, then show me how to clean up. Show the full workflow with exact commands and API calls.",
-    "rule": "Must show the full chained workflow: provision → deploy agent (with data access policy for model/agent) → test → deprovision",
-    "criteria": "The response must show the complete workflow in order: 1) Credential validation with aws sts get-caller-identity, 2) Collection provisioning including encryption policy, network policy, collection group with NextGen, and the correct collection type auto-selected for agentic search (SEARCH), 3) Data access policy that grants the connector IAM role access to all four ResourceTypes (collection, index, model, agent) — this is critical for pipeline-based agentic queries to work, 4) Model registration with inline Bedrock connector returning a model_id, 5) Flow agent creation using that model_id in QueryPlanningTool, 6) Search pipeline creation with agentic_query_translator using the agent_id, 7) An agentic search query test using the pipeline, 8) Deprovision/cleanup steps that remove resources in reverse dependency order. All steps must be present and correctly chained — outputs from earlier steps must feed into later steps. The collection type and model must not be explicitly told by the user — the skill must determine them from the strategy.",
+    "rule": "Must show the full chained workflow: provision \u2192 deploy agent (with data access policy for model/agent) \u2192 test \u2192 deprovision",
+    "criteria": "The response must show the complete workflow in order: 1) Credential validation with aws sts get-caller-identity, 2) Collection provisioning including encryption policy, network policy, collection group with NextGen, and the correct collection type auto-selected for agentic search (SEARCH), 3) Data access policy that grants the connector IAM role access to all four ResourceTypes (collection, index, model, agent) \u2014 this is critical for pipeline-based agentic queries to work, 4) Model registration with inline Bedrock connector returning a model_id, 5) Flow agent creation using that model_id in QueryPlanningTool, 6) Search pipeline creation with agentic_query_translator using the agent_id, 7) An agentic search query test using the pipeline, 8) Deprovision/cleanup steps that remove resources in reverse dependency order. All steps must be present and correctly chained \u2014 outputs from earlier steps must feed into later steps. The collection type and model must not be explicitly told by the user \u2014 the skill must determine them from the strategy.",
     "rationale": "Validates the skill can guide an agent through the full lifecycle with correct collection type detection and the critical data access policy for model/agent permissions"
   },
   {
@@ -246,5 +342,21 @@
     "rule": "Must set AWS_SDK_UA_APP_ID=opensearch-agent-skills for both the shell path (per-command prefix) and the MCP path (env block in the aws-api-mcp-server config)",
     "criteria": "The response must explain both mechanisms: (1) for shell aws commands, prefix each command with 'AWS_SDK_UA_APP_ID=opensearch-agent-skills' (not a global export); and (2) for calls through awslabs.aws-api-mcp-server, set \"AWS_SDK_UA_APP_ID\": \"opensearch-agent-skills\" in that server's env block in the MCP configuration. Both the shell and MCP mechanisms must be mentioned.",
     "rationale": "Usage attribution must cover all cloud requests across both execution paths (shell CLI and MCP-routed calls)"
+  },
+  {
+    "id": "launchpad-unstructured-default-agentic-strategy-query",
+    "skill": "opensearch-launchpad",
+    "prompt": "I have a PDF document I want to search. What strategy should I use?",
+    "rule": "Must default to agentic strategy for unstructured documents (PDF/DOCX/PPTX/XLSX)",
+    "criteria": "The response must recommend or default to the agentic search strategy for unstructured documents like PDFs. It must not ask the user to choose a strategy for PDFs \u2014 agentic is the default. It may mention that other strategies are available if explicitly requested.",
+    "rationale": "Phase 2 says: for unstructured documents, default to agentic strategy"
+  },
+  {
+    "id": "launchpad-sparse-uses-neural-sparse-tool",
+    "skill": "opensearch-launchpad",
+    "prompt": "I have a rank_features field with sparse vectors. How does the agentic flow agent search this index?",
+    "rule": "Must explain that sparse agentic uses NeuralSparseSearchTool (not QueryPlanningTool)",
+    "criteria": "The response must explain that for rank_features (sparse) fields, the flow agent uses NeuralSparseSearchTool to execute neural_sparse search directly. It must NOT suggest using QueryPlanningTool or agentic_query_translator for sparse fields, as QueryPlanningTool only generates neural (dense) queries.",
+    "rationale": "QueryPlanningTool does not support neural_sparse \u2014 it always generates neural queries with k parameter which is incompatible with rank_features fields"
   }
 ]
