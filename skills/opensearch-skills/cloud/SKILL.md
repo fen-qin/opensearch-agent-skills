@@ -22,6 +22,7 @@ Category skill for deploying OpenSearch to cloud infrastructure.
 | Skill | Description |
 |---|---|
 | [aws-setup](aws-setup/SKILL.md) | Provision and configure Amazon OpenSearch Service domains and Serverless collections, then deploy search configurations |
+| [managed-ingestion-service](managed-ingestion-service/SKILL.md) | Ingest chunks at scale via OSIS pipelines with optional ASE (semantic_enrichment) |
 
 ## When to Use
 
@@ -31,6 +32,11 @@ Read [aws-setup/SKILL.md](aws-setup/SKILL.md) when the user wants to:
 - Deploy a local search setup to AWS
 - Set up Bedrock connectors for ML models
 - Configure IAM roles and access policies for OpenSearch
+
+Read [managed-ingestion-service/SKILL.md](managed-ingestion-service/SKILL.md) when the user wants to:
+- Ingest JSONL chunks into an AOS domain or AOSS collection at scale via OSIS
+- Set up an OSIS pipeline with semantic_enrichment (ASE)
+- Upload chunks to S3 and create a managed ingestion pipeline
 
 ## Usage Attribution
 

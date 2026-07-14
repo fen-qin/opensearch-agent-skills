@@ -1,0 +1,57 @@
+{
+  "description": "Public/open-licensed PDF fixtures for document-processing evaluation. Test-only (not customer sample data). Used by the gated ingestion eval to validate auto-detection, Docling processing per profile, and quality metrics. One representative document per profile.",
+  "license_note": "arXiv papers are distributed under arXiv's non-exclusive license / open terms (authors retain copyright; redistribution for research/testing is permitted). The financial-statement sample and the overall sample set originate from the opendataloader-pdf project (Apache-2.0). The Bill of Rights scan is a U.S. federal/public-domain work (17 U.S.C. 105). All are safe to commit for testing.",
+  "sources": {
+    "opendataloader-pdf": "https://github.com/opendataloader-project/opendataloader-pdf/tree/main/samples/pdf (Apache-2.0)"
+  },
+  "fixtures": [
+    {
+      "file": "arxiv-2408.02509-semantic.pdf",
+      "source_url": "https://github.com/opendataloader-project/opendataloader-pdf/blob/main/samples/pdf/2408.02509v1.pdf",
+      "origin": "arXiv:2408.02509 (via opendataloader-pdf samples)",
+      "license": "arXiv open / author license",
+      "bytes": 586552,
+      "pages": 14,
+      "doc_type": "prose / digital text (multi-page paper)",
+      "expected_detection": "semantic",
+      "recommended_profile": "semantic",
+      "notes": "Text-rich multi-page paper. Validates the semantic profile and multi-page navigation."
+    },
+    {
+      "file": "financial-statement-tables.pdf",
+      "source_url": "https://github.com/opendataloader-project/opendataloader-pdf/blob/main/samples/pdf/issue-336-conto-economico-bialetti.pdf",
+      "origin": "opendataloader-pdf samples (issue-336, income statement)",
+      "license": "Apache-2.0 (opendataloader-pdf)",
+      "bytes": 57820,
+      "pages": 2,
+      "doc_type": "table-heavy (financial income statement)",
+      "expected_detection": "semantic",
+      "recommended_profile": "tables",
+      "notes": "Financial statement with embedded tables in prose. Auto-detect returns 'semantic' by design (tables not auto-detected); use --profile tables. Validates TableFormer extraction (yields table chunks)."
+    },
+    {
+      "file": "arxiv-1901.03003-multimodal.pdf",
+      "source_url": "https://github.com/opendataloader-project/opendataloader-pdf/blob/main/samples/pdf/1901.03003.pdf",
+      "origin": "arXiv:1901.03003 (via opendataloader-pdf samples)",
+      "license": "arXiv open / author license",
+      "bytes": 1536792,
+      "pages": 15,
+      "doc_type": "figure-rich / multimodal (paper with figures)",
+      "expected_detection": "multimodal",
+      "recommended_profile": "multimodal",
+      "notes": "Multi-page paper with figures. Validates auto-detect 'multimodal' and the multimodal profile (light SmolVLM image descriptions; approximate)."
+    },
+    {
+      "file": "archives-bill-of-rights-scanned.pdf",
+      "source_url": "https://www.archives.gov/files/founding-docs/bill-of-rights.pdf",
+      "origin": "U.S. National Archives",
+      "license": "public-domain (17 U.S.C. 105)",
+      "bytes": 1310779,
+      "pages": 1,
+      "doc_type": "scanned image (no extractable text)",
+      "expected_detection": "scanned",
+      "recommended_profile": "scanned",
+      "notes": "Scanned image; ~0 extractable text. Validates auto-detect 'scanned' and the scanned OCR profile (RapidOCR PP-OCRv4). Single page — replace with a multi-page scan when a clean-licensed one is found."
+    }
+  ]
+}
