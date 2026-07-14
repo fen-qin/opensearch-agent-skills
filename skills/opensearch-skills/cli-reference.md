@@ -138,9 +138,12 @@ uv run python scripts/opensearch_ops.py deploy-agentic-model \
 
 # 2a. For stateless searches (REST APIs, search apps):
 # Create a flow agent
+# For sparse (rank_features): add --sparse --embedding-model-id <SPARSE_TOKENIZER_ID> --index my-index
 uv run python scripts/opensearch_ops.py create-flow-agent --name my-flow-agent --model-id <CONNECTOR_MODEL_ID>
 # Create flow agent pipeline
+# For sparse: add --sparse --agentic-model-id <LLM_MODEL_ID> (stores in _meta, no search pipeline needed)
 uv run python scripts/opensearch_ops.py create-flow-agentic-pipeline --name my-flow-pipeline --agent-id <AGENT_ID> --index my-index
+
 
 # 2b. For multi-turn conversations (chatbots):
 # Create a conversational agent

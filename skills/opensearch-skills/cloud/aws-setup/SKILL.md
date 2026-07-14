@@ -117,11 +117,15 @@ Default deployment target is **Serverless NextGen** for all strategies except co
 | `neural_sparse` | Serverless NextGen | SEARCH | Automatic semantic enrichment built-in |
 | `dense_vector` | Serverless NextGen | VECTORSEARCH | GPU-accelerated kNN, Bedrock connector supported |
 | `hybrid` | Serverless NextGen | VECTORSEARCH | Combines BM25 + vector with GPU acceleration |
-| `agentic` (flow) | Serverless NextGen | SEARCH | Stateless query planning, low latency, managed infra |
+| `agentic` (flow, no vectors) | Serverless NextGen | SEARCH | BM25-only query planning, no embedding models |
+| `agentic` (flow, with vectors) | Serverless NextGen | VECTORSEARCH | Agent generates neural/hybrid queries using knn_vector fields |
 | `agentic` (conversational) | Domain | — | Stateful with RAG + memory, multi-turn conversations |
 | Any (non-NextGen requested) | Serverless | — | Standard SDK, `StandbyReplicas=DISABLED` for dev/test |
 
 ## Workflow
+
+When invoked from launchpad after local iteration, consume the decisions already made
+there (search strategy, data type) instead of re-asking.
 
 Follow the guides linked in the table above, in order:
 

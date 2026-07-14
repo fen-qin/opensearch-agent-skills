@@ -7,10 +7,29 @@
   <link rel="stylesheet" href="/styles.css" />
   <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.10/babel.min.js"></script>
+  <script>
+    // Load PDF.js worker
+    window.pdfjsLib = null;
+    import("https://unpkg.com/pdfjs-dist@4.4.168/build/pdf.min.mjs").then(lib => {
+      lib.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs";
+      window.pdfjsLib = lib;
+    });
+  </script>
 </head>
 <body>
   <div id="root"></div>
+  <!-- Ordered so shared globals + dependencies load before consumers.
+       All files share one global scope (classic text/babel scripts, no build). -->
+  <script type="text/babel" src="/shared.jsx"></script>
+  <script type="text/babel" src="/lib/fieldRoles.jsx"></script>
+  <script type="text/babel" src="/components/TemplateIcon.jsx"></script>
+  <script type="text/babel" src="/components/IndexDropdown.jsx"></script>
+  <script type="text/babel" src="/components/results/EcommerceResults.jsx"></script>
+  <script type="text/babel" src="/components/results/DocumentResults.jsx"></script>
+  <script type="text/babel" src="/components/AgenticChat.jsx"></script>
+  <script type="text/babel" src="/components/ingestion/IngestionView.jsx"></script>
+  <script type="text/babel" src="/components/ComparisonView.jsx"></script>
   <script type="text/babel" src="/app.jsx"></script>
 </body>
 </html>

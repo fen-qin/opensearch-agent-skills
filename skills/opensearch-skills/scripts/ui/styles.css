@@ -1682,3 +1682,319 @@ pre {
   .topbar { flex-wrap: wrap; gap: 8px; }
   .topbar-right { width: 100%; justify-content: flex-end; }
 }
+
+/* ---------------------------------------------------------------------------
+   Ingestion View
+   --------------------------------------------------------------------------- */
+
+/* View toggle in topbar */
+.view-toggle-bar { display: flex; background: var(--bg-secondary, #f0f0f0); border-radius: 6px; padding: 2px; gap: 2px; }
+.view-toggle-btn { padding: 5px 12px; border: none; background: transparent; border-radius: 5px; font-size: 12px; font-weight: 500; cursor: pointer; color: var(--text-secondary, #666); transition: all 0.2s; }
+.view-toggle-btn.active { background: var(--bg-primary, #fff); color: var(--text-primary, #111); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+.view-toggle-btn.disabled { opacity: 0.4; cursor: default; }
+
+/* Ingestion view container */
+.ingestion-view { padding: 8px 0; display: flex; flex-direction: column; gap: 12px; }
+.ingestion-empty { text-align: center; padding: 60px 20px; color: var(--text-secondary, #888); font-size: 13px; }
+
+
+/* Ingestion cards */
+.ingestion-card { background: var(--bg-primary, #fff); border: 1px solid var(--border, #e8e8e8); border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+.ingestion-card-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--border, #f0f0f0); background: var(--bg-secondary, #fafafa); }
+.ingestion-card-header h3 { font-size: 12px; font-weight: 600; color: var(--text-primary, #333); }
+
+/* Badges */
+.ingestion-badge { font-size: 10px; padding: 3px 8px; border-radius: 8px; font-weight: 500; }
+.badge-active { background: #e3f2fd; color: #1565c0; }
+.badge-ready { background: #fff3e0; color: #e65100; }
+.badge-done { background: #e8f5e9; color: #2e7d32; }
+
+/* Progress */
+.ingestion-progress { padding: 10px 14px; }
+.ingestion-progress-bar { background: var(--bg-secondary, #f0f0f0); border-radius: 4px; height: 5px; overflow: hidden; }
+.ingestion-progress-fill { height: 100%; border-radius: 4px; background: #4caf50; transition: width 0.3s; }
+.ingestion-progress-fill.indeterminate { background: linear-gradient(90deg, #1a73e8 0%, #42a5f5 50%, #1a73e8 100%); background-size: 200% 100%; animation: indeterminate 1.5s infinite linear; }
+@keyframes indeterminate { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.ingestion-progress-text { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-secondary, #888); margin-top: 4px; }
+
+/* Metrics */
+.ingestion-metrics { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--border, #f0f0f0); }
+.ingestion-metric { text-align: center; padding: 10px 4px; border-right: 1px solid var(--border, #f0f0f0); }
+.ingestion-metric:last-child { border-right: none; }
+.metric-value { display: block; font-size: 16px; font-weight: 700; }
+.metric-label { display: block; font-size: 9px; color: var(--text-secondary, #999); text-transform: uppercase; margin-top: 1px; }
+
+/* File list */
+.ingestion-files { }
+.ingestion-file { display: flex; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--bg-secondary, #f8f8f8); }
+.ingestion-file:last-child { border-bottom: none; }
+.ingestion-file-icon { width: 24px; height: 24px; border-radius: 4px; background: #fce4ec; color: #c62828; display: flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 700; margin-right: 10px; }
+.ingestion-file-info { flex: 1; }
+.ingestion-file-name { font-size: 12px; font-weight: 500; }
+.ingestion-file-meta { font-size: 10px; color: var(--text-secondary, #999); }
+.ingestion-file-badge { font-size: 9px; padding: 2px 7px; border-radius: 6px; font-weight: 500; }
+.badge-processing { background: #e3f2fd; color: #1565c0; animation: pulse-dot 1.5s infinite; }
+.badge-chunks_ready { background: #fff3e0; color: #e65100; }
+.badge-done { background: #e8f5e9; color: #2e7d32; }
+.badge-error { background: #fce4ec; color: #c62828; }
+
+/* Histogram */
+.ingestion-histogram { padding: 10px 14px; border-top: 1px solid var(--border, #f0f0f0); }
+.hist-title { font-size: 10px; color: var(--text-secondary, #999); margin-bottom: 6px; }
+.hist-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+.hist-label { width: 55px; text-align: right; font-size: 10px; color: var(--text-secondary, #888); }
+.hist-bar-bg { flex: 1; height: 8px; background: var(--bg-secondary, #f0f0f0); border-radius: 3px; overflow: hidden; }
+.hist-bar-fill { height: 100%; background: #90caf9; border-radius: 3px; transition: width 0.3s; }
+.hist-count { width: 20px; font-size: 10px; color: var(--text-secondary, #666); }
+
+/* Chunk tags */
+.chunk-tag { font-size: 10px; padding: 2px 8px; border-radius: 4px; background: var(--bg-secondary, #f0f0f0); color: var(--text-secondary, #666); }
+.section-tag { background: #e3f2fd; color: #1565c0; }
+
+/* PDF + Chunks side-by-side */
+.pdf-chunks-sidebyside { display: grid; grid-template-columns: 1fr 1fr; min-height: 400px; max-height: 600px; }
+.pdf-page-panel { border-right: 1px solid var(--border, #eee); overflow: auto; display: flex; flex-direction: column; align-items: center; padding: 8px; background: var(--bg-secondary, #f8f8f8); }
+.pdf-canvas { max-width: 100%; box-shadow: 0 2px 8px rgba(0,0,0,0.12); border-radius: 2px; }
+.chunks-from-page-panel { overflow-y: auto; max-height: 600px; padding: 8px; display: flex; flex-direction: column; }
+.panel-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary, #999); margin-bottom: 8px; font-weight: 600; align-self: flex-start; }
+.no-chunks-msg { padding: 40px 20px; text-align: center; color: var(--text-secondary, #888); font-size: 12px; flex: 1; display: flex; align-items: center; justify-content: center; }
+
+.page-chunk-card { border: 1px solid var(--border, #eee); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; cursor: pointer; transition: all 0.15s; }
+.page-chunk-card:hover { border-color: #90caf9; }
+.page-chunk-card.selected { border-color: #1565c0; background: #f0f7ff; }
+.page-chunk-header { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
+.page-chunk-text { font-size: 11px; line-height: 1.6; color: var(--text-primary, #333); max-height: 120px; overflow: hidden; white-space: pre-wrap; }
+
+.chunk-nav { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-secondary, #888); }
+.chunk-nav button { border: 1px solid var(--border, #ddd); background: var(--bg-primary, #fff); border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 11px; }
+.chunk-nav button:disabled { opacity: 0.3; cursor: default; }
+
+@media (max-width: 768px) {
+  .pdf-chunks-sidebyside { grid-template-columns: 1fr; }
+  .pdf-page-panel { max-height: 300px; border-right: none; border-bottom: 1px solid var(--border, #eee); }
+}
+
+/* --- Ingestion: profile badge + chunk-quality card --- */
+.ingestion-profile-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #0c4a6e;
+  background: #e0f2fe;
+  border: 1px solid #bae6fd;
+  border-radius: 10px;
+}
+
+.ingestion-quality {
+  margin-top: 12px;
+  padding: 12px;
+  background: #fafafa;
+  border: 1px solid #eee;
+  border-radius: 8px;
+}
+.quality-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.quality-stars { color: #f59e0b; font-size: 16px; letter-spacing: 1px; }
+.quality-bar { font-family: ui-monospace, Menlo, monospace; color: #0284c7; letter-spacing: -1px; }
+.quality-score { font-weight: 700; color: #334155; }
+.quality-effects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.quality-effect {
+  font-size: 11px;
+  padding: 2px 8px;
+  background: #f1f5f9;
+  border-radius: 10px;
+  color: #475569;
+}
+.quality-findings {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+.quality-findings .finding {
+  font-size: 12px;
+  padding: 4px 0;
+  color: #475569;
+}
+.finding-sev {
+  display: inline-block;
+  min-width: 42px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  margin-right: 6px;
+}
+.finding-high .finding-sev { color: #dc2626; }
+.finding-med .finding-sev { color: #d97706; }
+.finding-low .finding-sev { color: #ca8a04; }
+.finding-info .finding-sev { color: #0284c7; }
+
+/* --- Ingestion: clearer quality panel --- */
+.quality-verdict { font-weight: 700; color: #334155; flex: 1; }
+.quality-signals { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.quality-signal { font-size: 12px; color: #475569; }
+.quality-signal .signal-mark { display: inline-block; min-width: 16px; font-weight: 700; }
+.quality-signal.ok .signal-mark { color: #16a34a; }
+.quality-signal.warn .signal-mark { color: #d97706; }
+.quality-coverage {
+  margin-top: 10px;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: #475569;
+  background: #f8fafc;
+  border-left: 3px solid #cbd5e1;
+  border-radius: 4px;
+}
+
+/* --- Ingestion: agent quality verdict --- */
+.quality-section-title { font-size: 12px; font-weight: 700; color: #334155; margin: 12px 0 6px; }
+.verdict-pill {
+  display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 10px;
+  font-size: 11px; font-weight: 700;
+}
+.verdict-great { background: #dcfce7; color: #166534; }
+.verdict-good { background: #e0f2fe; color: #075985; }
+.verdict-fair { background: #fef9c3; color: #854d0e; }
+.verdict-needs_attention { background: #fee2e2; color: #991b1b; }
+.verdict-by { font-size: 10px; color: #94a3b8; margin-left: 8px; font-weight: 400; }
+.verdict-summary { font-size: 12px; color: #475569; margin-bottom: 8px; }
+.verdict-dims { display: flex; flex-direction: column; gap: 3px; }
+.verdict-dim { font-size: 12px; color: #475569; }
+.dim-rating {
+  display: inline-block; min-width: 38px; font-size: 10px; font-weight: 700;
+  text-transform: uppercase; margin-right: 6px;
+}
+.dim-good .dim-rating { color: #16a34a; }
+.dim-fair .dim-rating { color: #d97706; }
+.dim-poor .dim-rating { color: #dc2626; }
+.dim-name { font-weight: 600; }
+.dim-note { color: #64748b; }
+.verdict-recs { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: #475569; }
+.quality-unjudged { font-size: 12px; color: #64748b; margin-top: 10px; }
+.quality-unjudged code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+
+/* ------------------------------------------------------------------ */
+/* Domain emphasis for result cards                                    */
+/* ------------------------------------------------------------------ */
+
+/* E-commerce: relative positioning so the deal badge can overlay the image */
+.ecommerce-image { position: relative; }
+
+.ecommerce-deal-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+  background: var(--destructive, #e11d48);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: var(--radius, 6px);
+  letter-spacing: 0.2px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+}
+
+.ecommerce-emphasis {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.ecommerce-price {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 16px;
+  color: var(--price, #0f766e);
+}
+.ecommerce-price strong { font-size: 17px; font-weight: 800; }
+.ecommerce-price-was {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: line-through;
+}
+
+.ecommerce-rating {
+  color: #f59e0b;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.ecommerce-lowstock {
+  color: var(--destructive, #b91c1c);
+  background: color-mix(in srgb, var(--destructive, #e11d48) 12%, transparent);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--radius, 6px);
+}
+
+/* Document: title row with inline score badge, citation line, snippet */
+.doc-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.doc-score-badge {
+  flex-shrink: 0;
+  color: var(--primary);
+  font-weight: 700;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.doc-citation {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.doc-cite-doc { font-weight: 600; color: var(--primary); }
+.doc-cite-page,
+.doc-cite-section {
+  background: var(--secondary);
+  border-radius: var(--radius, 6px);
+  padding: 1px 7px;
+}
+
+.doc-snippet {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--foreground);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ------------------------------------------------------------------ */
+/* Ingestion-view chunk-set picker                                     */
+/* Reuses the shared .idx-dropdown component (see search index picker) */
+/* for a unified selection experience. Only a fallback note is needed. */
+/* ------------------------------------------------------------------ */
+.idx-empty-note {
+  font-size: 13px;
+  color: var(--muted-foreground);
+  font-style: italic;
+}

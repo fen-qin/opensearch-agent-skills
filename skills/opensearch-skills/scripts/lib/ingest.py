@@ -7,6 +7,7 @@ cloud ingestion via OSIS).
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -499,6 +500,8 @@ def process_document(
 
 STATUS_DIR = ".opensearch"
 STATUS_FILE = "ingestion-status.json"
+PID_FILE = os.path.join(STATUS_DIR, "ingestion.pid")
+LOG_FILE = os.path.join(STATUS_DIR, "ingestion.log")
 
 
 def _status_path() -> Path:
@@ -522,6 +525,106 @@ def read_status() -> dict:
     if path.exists():
         return json.loads(path.read_text())
     return {"active": False}
+
+
+# ---------------------------------------------------------------------------
+# Background ingestion
+# ---------------------------------------------------------------------------
+
+
+def is_ingestion_running() -> bool:
+    """Check if a background ingestion process is alive by reading PID file.
+
+    Returns True only if the PID file exists and the process is still running.
+    Cleans up stale PID files for dead processes.
+    """
+    pid_path = Path(PID_FILE)
+    if not pid_path.exists():
+        return False
+
+    try:
+        pid = int(pid_path.read_text().strip())
+    except (ValueError, OSError):
+        return False
+
+    # Check if process is alive (signal 0 doesn't kill, just checks existence).
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, OSError):
+        # Process is dead — clean up stale PID file.
+        try:
+            pid_path.unlink()
+        except OSError:
+            pass
+        return False
+
+
+def ingest_background(
+    source: str,
+    index: str,
+    max_pages: int = 10,
+    max_tokens: int | None = None,
+    profile: str | None = None,
+) -> dict:
+    """Spawn ``opensearch_ops.py ingest`` as a detached background subprocess.
+
+    Writes the child PID to ``.opensearch/ingestion.pid`` and redirects
+    stdout/stderr to ``.opensearch/ingestion.log``. The caller should poll
+    with ``ingest-status`` or ``is_ingestion_running()`` to check progress.
+
+    Returns a summary dict immediately (does not wait for processing).
+    """
+    if is_ingestion_running():
+        return {
+            "error": "ingestion_already_running",
+            "detail": "A background ingestion process is already active. Use ingest-status to check progress.",
+        }
+
+    # Build the command — run the same CLI in foreground mode (no --background)
+    # so the subprocess does the actual work and writes status files.
+    scripts_dir = Path(__file__).resolve().parent.parent
+    cmd = [
+        sys.executable, str(scripts_dir / "opensearch_ops.py"),
+        "ingest",
+        "--source", source,
+        "--index", index,
+        "--max-pages", str(max_pages),
+        "--confirm",  # Already confirmed by the parent invocation
+    ]
+    if max_tokens is not None:
+        cmd.extend(["--max-tokens", str(max_tokens)])
+    if profile:
+        cmd.extend(["--profile", profile])
+
+    # Ensure status directory exists.
+    Path(STATUS_DIR).mkdir(exist_ok=True)
+
+    # Open log file for subprocess output.
+    log_path = Path(LOG_FILE)
+    log_fh = open(log_path, "w")
+
+    # Spawn detached subprocess.
+    proc = subprocess.Popen(
+        cmd,
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+
+    # Close file handle in parent — child owns it now.
+    log_fh.close()
+
+    # Write PID file.
+    Path(PID_FILE).write_text(str(proc.pid))
+
+    return {
+        "status": "background_started",
+        "pid": proc.pid,
+        "log_file": str(log_path),
+        "index": index,
+        "detail": "Ingestion running in background. Use ingest-status to check progress.",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -791,5 +894,6 @@ def ingest_local(
         "chunks_file": str(chunks_path),
         "index": index_name,
         "next_step": next_step,
+        "visualize": f"launch-ui --mode ingestion --index {index_name}",
     }
 

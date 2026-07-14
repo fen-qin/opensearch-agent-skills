@@ -5,7 +5,6 @@
 > (`.opensearch/chunks/<index>/<file>.jsonl`). The next stage — indexing those chunks into
 > OpenSearch with embeddings — is handled either locally or via cloud ingestion
 > ([managed-ingestion-service](../../cloud/managed-ingestion-service/SKILL.md)).
-> See [managed-ingestion-service](../../cloud/managed-ingestion-service/SKILL.md) for cloud ingestion.
 
 ## Overview
 
@@ -169,17 +168,9 @@ This guide stops at the chunk artifact (`.opensearch/chunks/<index>/<file>.jsonl
 
 The JSONL output can be ingested into any OpenSearch target:
 - **Local cluster** — bulk-index directly via `index-bulk`
-- **AOS domain** — upload to S3 and ingest via OSIS, or index directly
-- **AOSS collection** — upload to S3 and ingest via OSIS, or index directly
-
-```
-Source file → Convert (Docling) → Chunk (HybridChunker) → Export (.jsonl)   ← THIS GUIDE
-  → [choose your target] → Enrich + Index → Search                           ← next stage
-```
+- **AOS domain / AOSS collection** — upload to S3 and ingest via OSIS
 
 For cloud-scale ingestion via OSIS, see [managed-ingestion-service](../../cloud/managed-ingestion-service/SKILL.md).
-
-See [managed-ingestion-service](../../cloud/managed-ingestion-service/SKILL.md) for the OSIS cloud ingestion workflow.
 
 ---
 
@@ -187,4 +178,5 @@ See [managed-ingestion-service](../../cloud/managed-ingestion-service/SKILL.md) 
 
 - Default `semantic` profile keeps OCR **off** for speed on digital-text documents
 - Use `--max-pages` to limit processing for large documents
+- Use `--background` for large files — poll progress with `ingest-status`
 - For full document processing at scale, use cloud ingestion (private beta — contact opensearch-agent-skills-interests@amazon.com)

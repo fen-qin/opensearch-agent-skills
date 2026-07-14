@@ -102,6 +102,12 @@ Update state: `"iam_role_arn": "<role-arn>"`
 
 ### Step 2: Create ML Connector
 
+> **Prerequisite:** The data access policy must include `model` ResourceType for ML operations.
+> If it was not configured during provisioning, update the policy now:
+> add `{"Resource": ["model/<collection-name>/*"], "Permission": ["aoss:*"], "ResourceType": "model"}`
+> and add the Bedrock IAM role to `Principal`. Policy changes propagate within seconds;
+> if connector creation returns a permission error, retry.
+
 Use opensearch-mcp-server to create a Bedrock Titan connector:
 
 ```

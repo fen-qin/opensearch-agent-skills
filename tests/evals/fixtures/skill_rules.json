@@ -402,5 +402,29 @@
     "references": [
       "agentic_search_guide.md"
     ]
+  },
+  {
+    "id": "launchpad-unstructured-local-workflow",
+    "skill": "opensearch-launchpad",
+    "prompt": "I have a PDF research paper and want to build a local search app. Target is local.",
+    "rule": "Must follow unstructured preset for local: document processing then local_ase (sparse model + pipeline + bulk-index), then sparse flow agent setup",
+    "criteria": "The response must follow the unstructured local workflow: (1) process the PDF into chunks using document processing/ingest, (2) deploy a sparse model and create a sparse ingest pipeline to index chunks locally \u2014 the index must have a rank_features field for sparse embeddings, (3) set up a flow agent with NeuralSparseSearchTool (--sparse) so search uses the flow agent. Exit state: index has sparse-encoded chunks (rank_features) AND a flow agent is configured for search. It must NOT ask which search strategy to use \u2014 agentic is the default for unstructured. It must NOT skip the sparse encoding step or the flow agent setup.",
+    "rationale": "Unstructured preset local path: document_processing_guide then local_ase.md then sparse flow agent"
+  },
+  {
+    "id": "launchpad-unstructured-cloud-workflow",
+    "skill": "opensearch-launchpad",
+    "prompt": "I have PDF documents and want to deploy a search app on AWS. Target is aws.",
+    "rule": "Must follow unstructured preset for cloud: provision AOSS, then managed-ingestion-service for OSIS ingestion, then flow agent setup on the collection",
+    "criteria": "The response must follow the unstructured cloud workflow: (1) provision an AOSS collection, (2) use managed-ingestion-service or OSIS for ingestion with semantic_enrichment \u2014 the index gets sparse embeddings automatically via ASE, (3) set up a flow agent (QueryPlanningTool + agentic_query_translator pipeline) on the collection so search uses the flow agent. Exit state: index has ASE sparse enrichment AND a flow agent pipeline is configured for search. It must NOT ask which search strategy to use \u2014 agentic is the default for unstructured. It must mention OSIS or managed ingestion for the cloud path, not just direct bulk-indexing.",
+    "rationale": "Unstructured preset cloud path: aws-setup provision, managed-ingestion-service OSIS+ASE, then serverless-04-agentic-setup"
+  },
+  {
+    "id": "launchpad-unstructured-local-then-deploy",
+    "skill": "opensearch-launchpad",
+    "prompt": "I built a local search app with my PDF. Now I want to deploy it to AWS.",
+    "rule": "Must hand off to managed-ingestion-service for cloud ingestion (not just aws-setup direct indexing) since data is unstructured",
+    "criteria": "The response must route unstructured data deployment through managed-ingestion-service (OSIS with semantic_enrichment) for cloud ingestion \u2014 not just direct bulk-indexing via aws-setup. Chunks already exist locally so they should be uploaded to S3 and ingested via OSIS. Exit state: cloud index has ASE sparse enrichment AND a flow agent pipeline is configured for search. It must mention provisioning the AOSS collection, OSIS ingestion, and setting up the flow agent after ingestion.",
+    "rationale": "Phase 6 unstructured: provision AOSS, managed-ingestion-service handles OSIS ingestion, then agentic setup"
   }
 ]

@@ -371,6 +371,29 @@ def test_deploy_bedrock_model_missing_credentials(monkeypatch):
     assert "AWS credentials" in result
 
 
+def test_deploy_bedrock_model_success_includes_pre_post_process(monkeypatch):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA_TEST")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret_test")
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+
+    fake = _FakeClient(transport_responses=[
+        {},  # set_ml_settings
+        {"connector_id": "conn-123"},  # create connector
+        {"model_id": "model-456", "status": "CREATED"},  # register model
+        {"task_id": "task-789"},  # deploy model
+    ])
+    with patch("lib.operations.create_client", return_value=fake):
+        result = deploy_bedrock_model("amazon.titan-embed-text-v2:0")
+
+    # Verify the connector body includes pre/post process functions
+    connector_call = fake.transport.calls[1]  # second call is connector create
+    assert connector_call[1] == "/_plugins/_ml/connectors/_create"
+    connector_body = connector_call[2]
+    action = connector_body["actions"][0]
+    assert action["pre_process_function"] == "connector.pre_process.bedrock.embedding"
+    assert action["post_process_function"] == "connector.post_process.bedrock.embedding"
+
+
 # ---------------------------------------------------------------------------
 # deploy_agentic_model
 # ---------------------------------------------------------------------------
@@ -450,6 +473,33 @@ def test_create_flow_agent_success(monkeypatch):
 
     assert "created successfully" in result
     assert "agent-1" in result
+
+
+def test_create_flow_agent_without_embedding_model_id(monkeypatch):
+    fake = _FakeClient(transport_responses=[{"agent_id": "agent-2"}])
+    monkeypatch.setattr("lib.operations.create_client", lambda: fake)
+
+    result = create_flow_agent("my-agent", "model-1")
+
+    assert "created successfully" in result
+    # QueryPlanningTool should NOT have embedding_model_id
+    body = fake.transport.calls[0][2]
+    qp_tool = next(t for t in body["tools"] if t["type"] == "QueryPlanningTool")
+    assert "embedding_model_id" not in qp_tool["parameters"]
+
+
+def test_create_flow_agent_with_embedding_model_id(monkeypatch):
+    fake = _FakeClient(transport_responses=[{"agent_id": "agent-3"}])
+    monkeypatch.setattr("lib.operations.create_client", lambda: fake)
+
+    result = create_flow_agent("my-agent", "model-1", embedding_model_id="embed-model-1")
+
+    assert "created successfully" in result
+    assert "agent-3" in result
+    # QueryPlanningTool should have embedding_model_id
+    body = fake.transport.calls[0][2]
+    qp_tool = next(t for t in body["tools"] if t["type"] == "QueryPlanningTool")
+    assert qp_tool["parameters"]["embedding_model_id"] == "embed-model-1"
 
 
 # ---------------------------------------------------------------------------

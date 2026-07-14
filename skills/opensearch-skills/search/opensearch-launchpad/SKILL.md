@@ -132,12 +132,27 @@ See [cli-reference.md](../../cli-reference.md) for the full command reference.
 Ask for the data source. Supported inputs:
 - Built-in datasets (`load-sample --type builtin_imdb`)
 - Local files: JSON, JSONL, CSV, TSV, Parquet (`load-sample --type local_file --value <path>`)
-- PDF, DOCX, PPTX, XLSX — use Docling to process. Read [document_processing_guide.md](document_processing_guide.md).
+- PDF, DOCX, PPTX, XLSX — use Docling to process. Read [document_processing_guide.md](../../ingest/document-processing/document_processing_guide.md).
 - URLs or pasted JSON
 
 Inspect and validate the data (read a sample, confirm schema).
 
 ### Phase 2 — Gather Preferences
+
+First, **fork on data type** (from Phase 1). This is the single place where the
+unstructured special-casing is resolved — downstream phases stay config-driven.
+
+#### Unstructured documents (PDF/DOCX/PPTX/XLSX)
+
+Apply the [unstructured preset](unstructured_preset.md) — a fixed bundle of
+`agentic (flow)` strategy + `neural_sparse` ingest + `semantic_enrichment` cloud sink.
+Do **not** ask the strategy question. Confirm the preset with the user in one sentence,
+then continue to Phase 3. Only fall through to the structured strategy path if the user
+explicitly requests a different strategy.
+
+Then ask **Target** (below).
+
+#### Structured data (JSON/CSV/TSV)
 
 Ask **one at a time**:
 
@@ -150,9 +165,13 @@ Ask **one at a time**:
      - `hybrid` (combines keyword + semantic)
      - `agentic` (LLM-driven multi-step retrieval, requires OpenSearch 3.2+)
 
-2. **Target.** Where should the search app run?
-   - `local` (default) — Docker-based, fast iteration, optional AWS deployment later.
-   - `aws` — Deploy directly to Amazon OpenSearch Serverless. No Docker needed.
+2. **Target** (below).
+
+#### Target (both branches)
+
+Where should the search app run?
+- `local` (default) — Docker-based, fast iteration, optional AWS deployment later.
+- `aws` — Deploy directly to Amazon OpenSearch Serverless. No Docker needed.
 
 ### Phase 3 — Plan
 
@@ -162,7 +181,9 @@ Design a search architecture. Read the relevant knowledge files:
 - [sparse_vector_models.md](sparse_vector_models.md)
 - [opensearch_semantic_search_guide.md](opensearch_semantic_search_guide.md)
 - [agentic_search_guide.md](agentic_search_guide.md)
-- [document_processing_guide.md](document_processing_guide.md)
+- [document_processing_guide.md](../../ingest/document-processing/document_processing_guide.md) (unstructured: source → chunks)
+- [local_ase.md](local_ase.md) (unstructured: chunks → searchable index, local target)
+- [unstructured_preset.md](unstructured_preset.md) (the unstructured bundle)
 
 Present the plan and wait for user approval.
 
@@ -178,13 +199,14 @@ Execute the plan against the chosen target. Both targets end with the Search Bui
    ```
    - `"available"` → use it. `"auth_required"` → ask for credentials. `"no_cluster"` → `bash scripts/start_opensearch.sh`
 2. Create index, load data, configure pipelines using `opensearch_ops.py` commands.
+   - **Unstructured data:** follow the local steps in [unstructured_preset.md](unstructured_preset.md#target-local).
 3. Launch the UI:
    ```bash
    uv run python scripts/opensearch_ops.py launch-ui --index <index-name>
    ```
 4. Present: http://127.0.0.1:8765
 
-**For Agentic Search:** Ask for AWS credentials for Bedrock, then ask about agent type (Flow vs Conversational). See [cli-reference.md](../../cli-reference.md).
+**For Agentic Search:** Ask for AWS credentials for Bedrock. If the unstructured preset is active, use flow agent directly. Otherwise ask about agent type (Flow vs Conversational). See [cli-reference.md](../../cli-reference.md).
 
 After the UI is running, offer:
 > 1. **Evaluate search quality** (Phase 5)
@@ -193,7 +215,8 @@ After the UI is running, offer:
 
 #### Target: `aws`
 
-Hand off to [aws-setup](../../cloud/aws-setup/SKILL.md) skill — it handles provisioning, creating the index, loading data, and launching the UI connected to the AWS endpoint.
+- **Structured data:** Hand off to [aws-setup](../../cloud/aws-setup/SKILL.md) — it handles provisioning, creating the index, loading data, and launching the UI connected to the AWS endpoint.
+- **Unstructured data:** Follow the cloud steps in [unstructured_preset.md](unstructured_preset.md#target-cloud).
 
 After the UI is running, offer:
 > 1. **Evaluate search quality** (Phase 5)
@@ -207,6 +230,5 @@ Read and follow [evaluation_guide.md](evaluation_guide.md). If HIGH severity fin
 
 For users who iterated locally and now want to deploy to AWS.
 
-Hand off to [aws-setup](../../cloud/aws-setup/SKILL.md) skill — it handles provisioning, deploying the search config, and launching the UI connected to the AWS endpoint.
-
-**End state (both targets):** Search Builder UI at http://127.0.0.1:8765 connected to the endpoint.
+- **Structured data:** Hand off to [aws-setup](../../cloud/aws-setup/SKILL.md). Pass along the **search strategy** so it does not re-ask.
+- **Unstructured data:** Chunks already exist locally. Follow the cloud steps in [unstructured_preset.md](unstructured_preset.md#target-cloud).

@@ -6,6 +6,7 @@ the index-naming and file-output behavior can be tested in isolation.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -300,6 +301,8 @@ def test_ingest_local_without_index_derives_name(workdir):
     assert expected.exists()
     # next_step references the resolved index, never implies moving files
     assert "doc" in result["next_step"]
+    # visualize key tells the agent how to launch the chunk inspector
+    assert result["visualize"] == "launch-ui --mode ingestion --index doc"
     # metadata written alongside chunks under the named index
     assert (Path(STATUS_DIR) / "chunks" / "doc" / "_metadata.json").exists()
 
@@ -521,3 +524,35 @@ def test_resolve_chunk_source_stale_provenance(workdir):
     # Provenance points to a chunk set that no longer exists -> "".
     ingest.record_index_provenance("docs-v1", "docs")
     assert ingest.resolve_chunk_source("docs-v1") == ""
+
+
+# ---------------------------------------------------------------------------
+# is_ingestion_running (background PID check)
+# ---------------------------------------------------------------------------
+
+def test_is_ingestion_running_no_pid_file(workdir):
+    """When no PID file exists, is_ingestion_running returns False."""
+    from lib.ingest import is_ingestion_running
+    assert is_ingestion_running() is False
+
+
+def test_is_ingestion_running_current_process(workdir):
+    """When PID file contains the current process PID, returns True."""
+    from lib.ingest import is_ingestion_running, PID_FILE
+    pid_path = Path(PID_FILE)
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(str(os.getpid()))
+    assert is_ingestion_running() is True
+
+
+def test_is_ingestion_running_dead_pid(workdir):
+    """When PID file contains a dead PID, returns False and cleans up the file."""
+    from lib.ingest import is_ingestion_running, PID_FILE
+    pid_path = Path(PID_FILE)
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    # Use a PID that is almost certainly not running (max PID value).
+    dead_pid = 4194304  # Typical max PID on Linux
+    pid_path.write_text(str(dead_pid))
+    assert is_ingestion_running() is False
+    # Should have cleaned up the stale PID file.
+    assert not pid_path.exists()

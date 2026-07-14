@@ -267,6 +267,20 @@ def _resolve_semantic_runtime_hints(
         except Exception:
             pass
 
+    # Check index _meta for sparse agentic config (agent searches directly)
+    agentic_embedding_type = ""
+    agentic_agent_id = ""
+    try:
+        mapping_resp = client.indices.get_mapping(index=index_name)
+        meta = next(iter(mapping_resp.values()), {}).get("mappings", {}).get("_meta", {})
+        if meta.get("agentic_type") == "sparse" and meta.get("agentic_agent_id"):
+            agentic_embedding_type = "sparse"
+            agentic_agent_id = meta["agentic_agent_id"]
+            if meta.get("agentic_model_id"):
+                agentic_model_id = meta["agentic_model_id"]
+    except Exception:
+        pass
+
     return {
         "vector_field": vector_field,
         "model_id": model_id,
@@ -279,6 +293,8 @@ def _resolve_semantic_runtime_hints(
         "rag_model_id": rag_model_id,
         "agentic_model_id": agentic_model_id,
         "agentic_agent_type": agentic_agent_type,
+        "agentic_embedding_type": agentic_embedding_type,
+        "agentic_agent_id": agentic_agent_id,
     }
 
 
@@ -471,9 +487,12 @@ def _is_vector_value(v: object) -> bool:
     return False
 
 
+_HIDDEN_FIELDS = {"bboxes"}
+
+
 def _strip_vector_fields(source: dict) -> dict:
-    """Return a shallow copy of *source* with embedding/vector fields removed."""
-    return {k: v for k, v in source.items() if not _is_vector_value(v)}
+    """Return a shallow copy of *source* with embedding/vector and internal fields removed."""
+    return {k: v for k, v in source.items() if not _is_vector_value(v) and k not in _HIDDEN_FIELDS}
 
 
 def preview_text(source: dict) -> str:
@@ -879,11 +898,16 @@ def _introspect_search_config(client: OpenSearch, index_name: str) -> dict:
     has_sparse = hints.get("has_sparse", "false") == "true"
     has_neural = hints.get("has_neural_search_pipeline", "false") == "true"
     has_agentic = hints.get("has_agentic_pipeline", "false") == "true"
+    agentic_embedding_type = hints.get("agentic_embedding_type", "")
     semantic_ready = bool(vector_field and (model_id or (has_sparse and has_neural)))
 
     has_search_pipeline = bool(hints.get("search_pipeline", ""))
     has_rag = hints.get("has_rag_processor", "false") == "true"
-    if has_agentic:
+
+    # Sparse agentic (detected via _meta) is also a flow agent
+    if agentic_embedding_type == "sparse":
+        strategy = "agentic_flow"
+    elif has_agentic:
         # Conversational agent has RAG processor, flow agent does not
         strategy = "agentic_conversational" if has_rag else "agentic_flow"
     elif semantic_ready and has_search_pipeline:
@@ -892,6 +916,10 @@ def _introspect_search_config(client: OpenSearch, index_name: str) -> dict:
         strategy = "neural_sparse" if has_sparse else "dense_vector"
     else:
         strategy = "bm25"
+
+    # Determine agentic_embedding_type if not already set from _meta
+    if not agentic_embedding_type and has_agentic:
+        agentic_embedding_type = "dense"
 
     return {
         "strategy": strategy,
@@ -903,6 +931,8 @@ def _introspect_search_config(client: OpenSearch, index_name: str) -> dict:
         "rag_model_id": hints.get("rag_model_id", ""),
         "agentic_model_id": hints.get("agentic_model_id", ""),
         "agentic_agent_type": hints.get("agentic_agent_type", ""),
+        "agentic_embedding_type": agentic_embedding_type,
+        "agentic_agent_id": hints.get("agentic_agent_id", ""),
     }
 
 
@@ -946,6 +976,178 @@ def _build_search_query(config: dict, query_text: str, size: int, memory_id: str
 
 
 # ---------------------------------------------------------------------------
+# Sparse agentic search (agent calls NeuralSparseSearchTool directly)
+# ---------------------------------------------------------------------------
+def _search_sparse_agentic(
+    client: OpenSearch, index_name: str, query: str, size: int, config: dict,
+) -> dict:
+    """Execute agentic search with sparse embedding.
+
+    The flow agent uses NeuralSparseSearchTool to perform neural_sparse search
+    directly (no agentic_query_translator pipeline). Results are parsed from the
+    tool output and formatted for the UI.
+    """
+    agent_id = config.get("agentic_agent_id", "")
+    agentic_model_id = config.get("agentic_model_id", "")
+
+    if not agent_id:
+        return {
+            "error": "Sparse agentic agent_id not found in index _meta.",
+            "hits": [], "total": 0, "took_ms": 0,
+            "query_mode": "agentic", "capability": "agentic_flow",
+            "used_semantic": True, "fallback_reason": "missing agent_id",
+        }
+
+    try:
+        import time as _t
+        t0 = _t.time()
+        resp = client.transport.perform_request(
+            "POST",
+            f"/_plugins/_ml/agents/{agent_id}/_execute",
+            body={"parameters": {"input": query}},
+        )
+        took_ms = int((_t.time() - t0) * 1000)
+
+        # Parse NeuralSparseSearchTool output: newline-delimited JSON documents
+        raw_result = ""
+        for inference in resp.get("inference_results", []):
+            for output in inference.get("output", []):
+                raw_result += output.get("result", "")
+
+        hits_out = _parse_sparse_tool_results(raw_result)
+
+        result: dict = {
+            "error": "",
+            "hits": hits_out[:size],
+            "total": len(hits_out),
+            "took_ms": took_ms,
+            "query_mode": "agentic",
+            "capability": "agentic_flow",
+            "used_semantic": True,
+            "fallback_reason": "",
+        }
+
+        # Generate RAG answer via LLM predict
+        if agentic_model_id and hits_out:
+            rag_answer = _generate_rag_summary(client, agentic_model_id, query, hits_out)
+            if rag_answer:
+                result["rag_answer"] = rag_answer
+
+        return result
+
+    except Exception as e:
+        # Fallback to BM25 on agent failure
+        lexical_fields = config.get("lexical_fields", ["*"])
+        try:
+            fallback_body = _build_default_lexical_body(query=query, size=size, fields=lexical_fields)
+            response = client.search(index=index_name, body=fallback_body)
+            return _format_search_response(
+                response, "agentic_fallback_bm25", "agentic_flow",
+                False, f"agent execution failed: {e}",
+            )
+        except Exception:
+            return {
+                "error": str(e), "hits": [], "total": 0, "took_ms": 0,
+                "query_mode": "agentic", "capability": "agentic_flow",
+                "used_semantic": False, "fallback_reason": str(e),
+            }
+
+
+def _parse_sparse_tool_results(raw_result: str) -> list[dict]:
+    """Parse NeuralSparseSearchTool output into hit dicts for the UI."""
+    hits_out = []
+
+    # Try newline-delimited JSON first
+    for line in raw_result.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            doc = json.loads(line)
+            if isinstance(doc, list):
+                # Got a JSON array on a single line — handle below
+                hits_out = []
+                break
+            source = doc.get("_source", doc)
+            clean_source = _strip_vector_fields(source)
+            hits_out.append({
+                "id": doc.get("_id", ""),
+                "score": doc.get("_score"),
+                "preview": preview_text(source),
+                "source": clean_source,
+            })
+        except json.JSONDecodeError:
+            continue
+
+    # Fallback: try as single JSON array
+    if not hits_out and raw_result.strip():
+        try:
+            parsed = json.loads(raw_result)
+            if isinstance(parsed, list):
+                for doc in parsed:
+                    source = doc.get("_source", doc)
+                    clean_source = _strip_vector_fields(source)
+                    hits_out.append({
+                        "id": doc.get("_id", ""),
+                        "score": doc.get("_score"),
+                        "preview": preview_text(source),
+                        "source": clean_source,
+                    })
+        except json.JSONDecodeError:
+            pass
+
+    return hits_out
+
+
+def _generate_rag_summary(
+    client: OpenSearch, model_id: str, query: str, hits: list[dict],
+) -> str:
+    """Generate a RAG summary from search hits using the LLM model."""
+    try:
+        context_parts = []
+        for i, hit in enumerate(hits[:5]):
+            src = hit.get("source", {})
+            parts = [f"{i + 1}."]
+            for key, val in src.items():
+                if val is not None and not isinstance(val, (dict, list)) and str(val).strip():
+                    sv = str(val).strip()
+                    if len(sv) > 120:
+                        sv = sv[:117] + "..."
+                    parts.append(f"{key}: {sv}")
+                if len(parts) > 8:
+                    break
+            context_parts.append(" | ".join(parts))
+        context_text = "\n".join(context_parts)
+
+        llm_prompt = (
+            f'The user asked: "{query}"\n\n'
+            f"Search returned {len(hits)} results. Here are the top matches:\n"
+            f"{context_text}\n\n"
+            f"Provide a brief, conversational summary of these results. "
+            f"Mention specific items and key details. Keep it under 100 words."
+        )
+        predict_body = {
+            "parameters": {
+                "system_prompt": "You are a helpful search assistant. Summarize search results concisely.",
+                "user_prompt": llm_prompt,
+            }
+        }
+        llm_response = client.transport.perform_request(
+            "POST", f"/_plugins/_ml/models/{model_id}/_predict", body=predict_body,
+        )
+        inference = llm_response.get("inference_results", [{}])[0]
+        output_data = inference.get("output", [{}])[0].get("dataAsMap", {})
+        return (
+            output_data.get("output", {})
+            .get("message", {})
+            .get("content", [{}])[0]
+            .get("text", "")
+        )
+    except Exception:
+        return ""
+
+
+# ---------------------------------------------------------------------------
 # Main search
 # ---------------------------------------------------------------------------
 def search_ui_search(
@@ -978,7 +1180,12 @@ def search_ui_search(
     query = query_text.strip()
     fallback_reason = ""
     is_agentic = strategy in ("agentic_flow", "agentic_conversational")
+    agentic_embedding_type = config.get("agentic_embedding_type", "")
     used_semantic = strategy in ("hybrid", "neural_sparse", "dense_vector") or is_agentic
+
+    # Sparse embedding: agent executes search directly via NeuralSparseSearchTool
+    if is_agentic and agentic_embedding_type == "sparse" and query:
+        return _search_sparse_agentic(client, index_name, query, size, config)
 
     if not query:
         executed_body: dict = {"size": size, "query": {"match_all": {}}}
@@ -1131,7 +1338,10 @@ def detect_index_profile(client: OpenSearch, index_name: str) -> dict:
         elif ftype in ("knn_vector", "rank_features"):
             vector_fields.append(name)
 
-    has_agentic = runtime_hints.get("has_agentic_pipeline", "false") == "true"
+    has_agentic = (
+        runtime_hints.get("has_agentic_pipeline", "false") == "true"
+        or bool(runtime_hints.get("agentic_agent_id"))
+    )
     has_sparse = runtime_hints.get("has_sparse", "false") == "true"
     has_neural_search_pipeline = runtime_hints.get("has_neural_search_pipeline", "false") == "true"
     has_semantic = bool(
@@ -1209,7 +1419,9 @@ def detect_index_profile(client: OpenSearch, index_name: str) -> dict:
         "suggested_template": template,
         "has_semantic": has_semantic,
         "has_agentic": has_agentic,
-        "agentic_agent_type": runtime_hints.get("agentic_agent_type", ""),
+        "agentic_agent_type": runtime_hints.get("agentic_agent_type", "") or (
+            "flow" if runtime_hints.get("agentic_agent_id") else ""
+        ),
     }
 
 
@@ -1258,18 +1470,86 @@ def generate_agent_prompts(client: OpenSearch, index_name: str) -> dict:
         agentic_model_id = config.get("agentic_model_id", "")
         if agentic_model_id:
             try:
-                field_desc = "\n".join(
-                    f"- {k}: {v}" for k, v in list(field_samples.items())[:10]
+                # Detect document-style index (has text + headings/section/chunk_id fields)
+                all_source_keys: set = set()
+                for hit in hits:
+                    all_source_keys.update(hit.get("_source", {}).keys())
+                is_document_index = "text" in all_source_keys and any(
+                    k in all_source_keys for k in ("headings", "section", "chunk_id")
                 )
-                prompt = (
-                    f"Given an OpenSearch index '{index_name}' with these fields and sample values:\n"
-                    f"{field_desc}\n\n"
-                    "Generate exactly 4 natural language SEARCH queries and 4 CHAT queries.\n\n"
-                    "SEARCH queries: specific lookups that find particular items.\n"
-                    "CHAT queries: conversational questions that explore the data or ask for recommendations.\n\n"
-                    'Return ONLY a JSON object: {"search": [...], "chat": [...]}\n'
-                    "No explanation, just the JSON."
-                )
+
+                if is_document_index:
+                    # For document indices: gather headings and text snippets
+                    headings_set: set = set()
+                    text_snippets: list = []
+                    for hit in hits:
+                        src = hit.get("_source", {})
+                        hdgs = src.get("headings", [])
+                        if isinstance(hdgs, list):
+                            for h in hdgs:
+                                if h and len(h) > 3:
+                                    headings_set.add(h)
+                        sect = src.get("section", "")
+                        if sect and len(sect) > 3:
+                            headings_set.add(sect)
+                        txt = str(src.get("text", "")).strip()
+                        if len(txt) > 30:
+                            text_snippets.append(txt[:200])
+
+                    # Fetch more docs to get diverse headings
+                    try:
+                        more_resp = client.search(
+                            index=index_name,
+                            body={"size": 15, "query": {"match_all": {}}, "_source": ["headings", "section", "text"]},
+                            params={"search_pipeline": "_none"},
+                        )
+                        for hit in more_resp.get("hits", {}).get("hits", []):
+                            src = hit.get("_source", {})
+                            hdgs = src.get("headings", [])
+                            if isinstance(hdgs, list):
+                                for h in hdgs:
+                                    if h and len(h) > 3:
+                                        headings_set.add(h)
+                            sect = src.get("section", "")
+                            if sect and len(sect) > 3:
+                                headings_set.add(sect)
+                            txt = str(src.get("text", "")).strip()
+                            if len(txt) > 30 and len(text_snippets) < 5:
+                                text_snippets.append(txt[:200])
+                    except Exception:
+                        pass
+
+                    headings_list = sorted(headings_set)[:15]
+                    context_parts = []
+                    if headings_list:
+                        context_parts.append("Document sections/headings:\n" + "\n".join(f"- {h}" for h in headings_list))
+                    if text_snippets:
+                        context_parts.append("Sample text excerpts:\n" + "\n---\n".join(text_snippets[:3]))
+
+                    prompt = (
+                        f"This is a search index '{index_name}' containing text content from documents.\n\n"
+                        f"{chr(10).join(context_parts)}\n\n"
+                        "Generate exactly 4 SEARCH queries and 4 CHAT queries that a user would naturally ask about this content.\n\n"
+                        "SEARCH queries: concise natural language questions targeting specific concepts or facts in the content.\n"
+                        "CHAT queries: broader conversational questions that explore themes, ask for explanations, or request summaries.\n\n"
+                        "All queries should be natural language questions a real user would type. "
+                        "Derive them from the actual content provided above.\n\n"
+                        'Return ONLY a JSON object: {"search": [...], "chat": [...]}\n'
+                        "No explanation, just the JSON."
+                    )
+                else:
+                    field_desc = "\n".join(
+                        f"- {k}: {v}" for k, v in list(field_samples.items())[:10]
+                    )
+                    prompt = (
+                        f"Given an OpenSearch index '{index_name}' with these fields and sample values:\n"
+                        f"{field_desc}\n\n"
+                        "Generate exactly 4 natural language SEARCH queries and 4 CHAT queries.\n\n"
+                        "SEARCH queries: specific lookups that find particular items.\n"
+                        "CHAT queries: conversational questions that explore the data or ask for recommendations.\n\n"
+                        'Return ONLY a JSON object: {"search": [...], "chat": [...]}\n'
+                        "No explanation, just the JSON."
+                    )
                 predict_body = {
                     "parameters": {
                         "system_prompt": "You generate example search queries. Return only valid JSON.",

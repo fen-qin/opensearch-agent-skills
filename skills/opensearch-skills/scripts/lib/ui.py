@@ -51,6 +51,24 @@ _comparison_config = {
     "improved_index": "",
 }
 
+# UI mode controls which views are available:
+#   "full"      -> both ingestion and search (local unstructured / launchpad)
+#   "ingestion" -> ingestion (chunk inspector) only, search hidden (direct parsing)
+#   "search"    -> search only, ingestion hidden (structured data, or remote/cloud)
+# The frontend additionally disables the ingestion view when the endpoint is
+# remote or no chunks exist for the selected index.
+_UI_MODES = ("full", "ingestion", "search")
+_ui_mode = {"mode": "full"}
+
+
+def set_ui_mode(mode: str = "full") -> str:
+    """Set the UI view-availability mode. One of: full, ingestion, search."""
+    global _ui_mode
+    if mode not in _UI_MODES:
+        mode = "full"
+    _ui_mode = {"mode": mode}
+    return f"UI mode set to '{mode}'."
+
 
 def set_comparison_mode(baseline_index: str, improved_index: str) -> str:
     """Configure the UI server for comparison mode."""
@@ -99,6 +117,22 @@ def _resolve_asset(path: str) -> Path | None:
     if target.is_file() and str(target).startswith(str(SEARCH_UI_STATIC_DIR)):
         return target
     return None
+
+
+def _has_local_chunks(index_name: str) -> bool:
+    """True if the index has local Docling chunk files under
+    .opensearch/chunks/<index>/*.jsonl. This is the sole signal that gates the
+    ingestion (Chunk Inspector) tab: chunk files only exist for locally-processed
+    unstructured data. Structured indexes and remote/cloud endpoints have none,
+    so they get search-only automatically.
+    """
+    if not index_name:
+        return False
+    try:
+        chunks_dir = Path(".opensearch") / "chunks" / index_name
+        return chunks_dir.is_dir() and any(chunks_dir.glob("*.jsonl"))
+    except Exception:
+        return False
 
 
 _ALLOWED_HOSTNAMES = ("127.0.0.1", "localhost")
@@ -167,11 +201,29 @@ class _UIHandler(BaseHTTPRequestHandler):
         # Config
         if parsed.path == "/api/config":
             backend = _get_backend_info()
+            # Ingestion tab shows only for a local endpoint whose selected index
+            # has an inspectable chunk set — either chunks under the same name,
+            # or a recorded provenance parent (e.g. docs-v1 built from "docs").
+            # Remote/cloud endpoints can't read local chunk files -> search-only.
+            cfg_index = (params.get("index") or [""])[0] or _default_index
+            is_local_endpoint = backend["backend_type"] == "local"
+            chunk_source = ""
+            if is_local_endpoint:
+                try:
+                    from .ingest import resolve_chunk_source
+                    chunk_source = resolve_chunk_source(cfg_index)
+                except Exception:
+                    chunk_source = cfg_index if _has_local_chunks(cfg_index) else ""
             self._send_json({
                 "default_index": _default_index,
                 "backend_type": backend["backend_type"],
                 "endpoint": backend["endpoint"],
                 "connected": backend["connected"],
+                "ui_mode": _ui_mode["mode"],
+                "show_ingestion_tab": bool(chunk_source),
+                # Chunk set the ingestion view should default to for this index
+                # (same name, or the provenance parent). "" when none.
+                "ingestion_chunk_index": chunk_source,
             })
             return
 
@@ -180,22 +232,67 @@ class _UIHandler(BaseHTTPRequestHandler):
             self._send_json(_comparison_config)
             return
 
-        # List available indices
+        # List available indices (cluster + local chunk dirs, merged).
         if parsed.path == "/api/indices":
+            merged = {}  # name -> {"name","docs","health","source"}
+
+            # Cluster indices (best-effort; may be unavailable in local/ingestion-only).
+            cluster_error = None
             try:
                 client = _get_client()
-                indices = sorted([
-                    idx for idx in client.cat.indices(format="json")
-                    if not str(idx.get("index", "")).startswith(".")
-                ], key=lambda x: x.get("index", ""))
-                self._send_json({
-                    "indices": [
-                        {"name": idx["index"], "docs": idx.get("docs.count", "0"), "health": idx.get("health", "")}
-                        for idx in indices
-                    ]
-                })
+                for idx in client.cat.indices(format="json"):
+                    name = str(idx.get("index", ""))
+                    if not name or name.startswith("."):
+                        continue
+                    merged[name] = {
+                        "name": name,
+                        "docs": idx.get("docs.count", "0"),
+                        "health": idx.get("health", ""),
+                        "source": "cluster",
+                    }
             except Exception as e:
-                self._send_json({"indices": [], "error": str(e)})
+                cluster_error = str(e)
+
+            # Local chunk indexes from .opensearch/chunks/<index>/
+            try:
+                chunks_root = Path(".opensearch") / "chunks"
+                if chunks_root.is_dir():
+                    for d in sorted(chunks_root.iterdir()):
+                        if not d.is_dir():
+                            continue
+                        name = d.name
+                        chunk_files = list(d.glob("*.jsonl"))
+                        chunk_count = sum(
+                            sum(1 for _ in f.open()) for f in chunk_files
+                        ) if chunk_files else 0
+                        profile = "semantic"
+                        meta = d / "_metadata.json"
+                        if meta.exists():
+                            try:
+                                import json as _json
+                                profile = _json.loads(meta.read_text()).get("profile", "semantic")
+                            except Exception:
+                                pass
+                        if name in merged:
+                            merged[name]["source"] = "both"
+                            merged[name]["local_chunks"] = chunk_count
+                            merged[name]["profile"] = profile
+                        else:
+                            merged[name] = {
+                                "name": name,
+                                "docs": str(chunk_count),
+                                "health": "",
+                                "source": "local",
+                                "local_chunks": chunk_count,
+                                "profile": profile,
+                            }
+            except Exception:
+                pass
+
+            payload = {"indices": sorted(merged.values(), key=lambda x: x["name"])}
+            if cluster_error and not merged:
+                payload["error"] = cluster_error
+            self._send_json(payload)
             return
 
         # Suggestions
@@ -265,6 +362,179 @@ class _UIHandler(BaseHTTPRequestHandler):
                 self._send_json({"search": [], "chat": [], "error": str(e)})
             return
 
+
+        # Ingestion status
+        if parsed.path == "/api/ingestion-status":
+            from .ingest import read_status
+            self._send_json(read_status())
+            return
+
+        # Serve PDF file for client-side rendering via PDF.js (index-aware)
+        if parsed.path == "/api/pdf-file":
+            import json as _json
+            index_name = (params.get("index") or [""])[0] or _default_index
+            # Security: resolve source_path only via _metadata.json — never
+            # accept a user-supplied file path. Validate the index stays under
+            # .opensearch/chunks/ to prevent path traversal.
+            chunks_base = Path(".opensearch", "chunks").resolve()
+            meta_path = (chunks_base / index_name / "_metadata.json")
+            if not meta_path.resolve().is_relative_to(chunks_base):
+                self._send_json({"error": "Invalid index"}, status=400)
+                return
+            source_file = ""
+            if meta_path.exists():
+                meta = _json.loads(meta_path.read_text())
+                source_file = meta.get("source_path", "")
+            # Fallback to ingestion status
+            if not source_file:
+                from .ingest import read_status
+                status = read_status()
+                source_file = status.get("source_path", "")
+            if source_file and Path(source_file).exists():
+                pdf_path = Path(source_file).resolve()
+                # Verify the file is a PDF (basic extension check)
+                if pdf_path.suffix.lower() != ".pdf":
+                    self._send_json({"error": "Not a PDF file"}, status=400)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/pdf")
+                self.send_header("Content-Length", str(pdf_path.stat().st_size))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(pdf_path.read_bytes())
+            else:
+                self._send_json({"error": "PDF file not found"}, status=404)
+            return
+
+        # List indices that have chunks (for ingestion view dropdown)
+        if parsed.path == "/api/ingestion-indices":
+            chunks_root = Path(".opensearch") / "chunks"
+            indices = []
+            if chunks_root.exists():
+                for d in sorted(chunks_root.iterdir()):
+                    if d.is_dir() and list(d.glob("*.jsonl")):
+                        chunk_count = sum(1 for f in d.glob("*.jsonl") for _ in open(f))
+                        indices.append({"name": d.name, "chunks": chunk_count})
+            self._send_json({"indices": indices})
+            return
+
+        # Ingestion chunks (for preview) — index-aware
+        if parsed.path == "/api/ingestion-chunks":
+            import json as _json
+            # Get index from query param, fall back to default index
+            index_name = (params.get("index") or [""])[0] or _default_index
+
+            # Look for chunks in .opensearch/chunks/<index>/
+            chunks_dir = Path(".opensearch") / "chunks" / index_name
+            chunks = []
+            all_chunks = []  # full set for accurate metrics/quality
+            total_lines = 0
+
+            if chunks_dir.exists():
+                # Read all .jsonl files in the index directory
+                for jsonl_file in sorted(chunks_dir.glob("*.jsonl")):
+                    for line in open(jsonl_file):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        total_lines += 1
+                        rec = _json.loads(line)
+                        all_chunks.append(rec)
+                        if len(chunks) < 50:  # limit to 50 for UI preview
+                            chunks.append(rec)
+
+            # Read profile + source info from per-index metadata if present
+            profile = "semantic"
+            source_name = ""
+            source_pages = None
+            meta_path = chunks_dir / "_metadata.json"
+            if meta_path.exists():
+                try:
+                    _meta = _json.loads(meta_path.read_text())
+                    profile = _meta.get("profile", "semantic")
+                    sp = _meta.get("source_path", "")
+                    source_name = Path(sp).name if sp else ""
+                    source_pages = _meta.get("pages_processed") or _meta.get("total_pages")
+                except Exception:
+                    pass
+
+            if chunks:
+                # Compute summary stats (legacy fields kept for compatibility)
+                token_counts = []
+                sections = set()
+                for c in chunks:
+                    text = c.get("text", "")
+                    token_counts.append(len(text.split()))
+                    for h in c.get("headings", []):
+                        sections.add(h)
+                avg_tokens = int(sum(token_counts) / len(token_counts)) if token_counts else 0
+                histogram = {"0-100": 0, "101-300": 0, "301-512": 0, "513+": 0}
+                for t in token_counts:
+                    if t <= 100: histogram["0-100"] += 1
+                    elif t <= 300: histogram["101-300"] += 1
+                    elif t <= 512: histogram["301-512"] += 1
+                    else: histogram["513+"] += 1
+
+                # Objective metrics (facts). Qualitative judgment is the agent's
+                # cached verdict (_quality.json), not a hard-coded score.
+                metrics = {}
+                try:
+                    from lib.eval_document_processing import compute_metrics
+                    # Source extractable chars (for coverage), best-effort via pypdf.
+                    # Limit to the pages actually processed so coverage compares
+                    # like-for-like (chunks from N pages vs. source text of those N pages).
+                    src_chars = None
+                    try:
+                        meta2 = _json.loads(meta_path.read_text()) if meta_path.exists() else {}
+                        sp2 = meta2.get("source_path", "")
+                        pages_done = meta2.get("pages_processed") or meta2.get("total_pages")
+                        if sp2 and Path(sp2).exists():
+                            from pypdf import PdfReader as _R
+                            pgs = _R(sp2).pages
+                            if isinstance(pages_done, int) and pages_done > 0:
+                                pgs = pgs[:pages_done]
+                            src_chars = sum(len((p.extract_text() or "")) for p in pgs) or None
+                    except Exception:
+                        src_chars = None
+                    metrics = compute_metrics(all_chunks, src_chars)
+                except Exception:
+                    pass
+
+                # Cached agent verdict, if it has been judged.
+                verdict = None
+                try:
+                    from lib.quality import read_verdict
+                    verdict = read_verdict(index_name)
+                except Exception:
+                    verdict = None
+
+                self._send_json({
+                    "chunks": chunks,
+                    "total": total_lines,
+                    "showing": len(chunks),
+                    "index": index_name,
+                    "profile": profile,
+                    "source_name": source_name,
+                    "source_pages": source_pages,
+                    "summary": {
+                        "avg_tokens": avg_tokens,
+                        "sections": len(sections),
+                        "section_names": sorted(sections)[:20],
+                        "tokens_avg_est": metrics.get("avg_tokens"),
+                        "tokens_median_est": metrics.get("median_tokens"),
+                        "pct_chunks_with_headings": metrics.get("pct_chunks_with_headings"),
+                        "chunks_with_tables": metrics.get("chunks_with_tables", 0),
+                        "chunks_with_image_descriptions": metrics.get("chunks_with_image_descriptions", 0),
+                        "coverage": metrics.get("coverage"),
+                    },
+                    "quality": None,
+                    "verdict": verdict,
+                    "histogram": histogram,
+                })
+            else:
+                self._send_json({"chunks": [], "total": 0, "index": index_name, "profile": profile, "summary": {}, "quality": {}, "histogram": {}})
+            return
+
         # Search API
         if parsed.path == "/api/search":
             self._handle_search(params)
@@ -283,6 +553,7 @@ class _UIHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
@@ -292,6 +563,21 @@ class _UIHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length)) if length else {}
             self._handle_search_post(body)
+            return
+        if parsed.path == "/api/connect":
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = connect_ui(
+                endpoint=body.get("endpoint", ""),
+                port=body.get("port", 443),
+                use_ssl=body.get("use_ssl", True),
+                username=body.get("username", ""),
+                password=body.get("password", ""),
+                aws_region=body.get("aws_region", ""),
+                aws_service=body.get("aws_service", ""),
+                index_name=body.get("index", ""),
+            )
+            self._send_json({"result": result})
             return
         self.send_error(404)
 
@@ -408,6 +694,7 @@ def launch_ui(
     aws_service: str = "",
     username: str = "",
     password: str = "",
+    mode: str = "full",
 ) -> str:
     """Launch the Search Builder UI.
 
@@ -418,11 +705,16 @@ def launch_ui(
         aws_service: AWS service type ('aoss' or 'es').
         username: Basic auth username (for non-AWS remote clusters).
         password: Basic auth password (for non-AWS remote clusters).
+        mode: UI views to expose — 'full' (ingestion+search), 'ingestion'
+            (chunk inspector only), or 'search' (search only).
     """
     global _default_index, _endpoint_override
 
     if index_name:
         _default_index = index_name
+
+    # Set which views are available (full / ingestion / search).
+    set_ui_mode(mode)
 
     # Set endpoint override from explicit parameters
     if endpoint:
@@ -475,7 +767,8 @@ def launch_ui(
             except Exception:
                 time.sleep(0.25)
 
-        msg = f"Search Builder UI started at: {url}"
+        label = "Chunk Inspector (ingestion-only)" if _ui_mode["mode"] == "ingestion" else "Search Builder UI"
+        msg = f"{label} started at: {url}"
         if _default_index:
             msg += f"\nDefault index: {_default_index}"
         if endpoint:

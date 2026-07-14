@@ -246,6 +246,8 @@ def deploy_bedrock_model(model_name: str) -> str:
             "url": f"https://bedrock-runtime.{region}.amazonaws.com/model/{model_name}/invoke",
             "headers": {"content-type": "application/json"},
             "request_body": '{"inputText": "${parameters.inputText}"}',
+            "pre_process_function": "connector.pre_process.bedrock.embedding",
+            "post_process_function": "connector.post_process.bedrock.embedding",
         }],
     }
 
@@ -344,7 +346,7 @@ def deploy_agentic_model(
     secret_key: str,
     region: str = "us-east-1",
     session_token: str = "",
-    model_name: str = "us.anthropic.claude-sonnet-4-20250514-v1:0",
+    model_name: str = "us.anthropic.claude-sonnet-4-6",
 ) -> str:
     if not access_key or not secret_key:
         return "Error: AWS credentials required."
@@ -396,7 +398,7 @@ def deploy_rag_model(
     secret_key: str,
     region: str = "us-east-1",
     session_token: str = "",
-    model_name: str = "us.anthropic.claude-sonnet-4-20250514-v1:0",
+    model_name: str = "us.anthropic.claude-sonnet-4-6",
 ) -> str:
     """Deploy a Bedrock model for the RAG processor.
 
@@ -449,33 +451,151 @@ def deploy_rag_model(
         return f"Error creating RAG model: {e}"
 
 
-def create_flow_agent(agent_name: str, model_id: str) -> str:
-    if not model_id:
-        return "Error: model_id required."
-    try:
-        client = create_client()
+# ---------------------------------------------------------------------------
+# Flow agent builders (subclass pattern: sparse vs dense)
+# ---------------------------------------------------------------------------
+
+
+class FlowAgentBuilder:
+    """Base class for building flow agents."""
+
+    def __init__(self, client: OpenSearch, agent_name: str, model_id: str,
+                 embedding_model_id: str = "", index_name: str = ""):
+        self.client = client
+        self.agent_name = agent_name
+        self.model_id = model_id
+        self.embedding_model_id = embedding_model_id
+        self.index_name = index_name
+
+    def build_tools(self) -> list:
+        raise NotImplementedError
+
+    def description(self) -> str:
+        return "Flow agent for agentic search"
+
+    def create(self) -> str:
         body = {
-            "name": agent_name,
+            "name": self.agent_name,
             "type": "flow",
-            "description": "Flow agent for agentic search",
-            "tools": [
-                {"type": "IndexMappingTool", "name": "IndexMappingTool"},
-                {
-                    "type": "QueryPlanningTool",
-                    "parameters": {
-                        "model_id": model_id,
-                        "response_filter": "$.output.message.content[0].text",
-                    },
-                },
-            ],
+            "description": self.description(),
+            "tools": self.build_tools(),
         }
-        resp = client.transport.perform_request(
+        resp = self.client.transport.perform_request(
             "POST", "/_plugins/_ml/agents/_register", body=body
         )
         agent_id = resp.get("agent_id")
         if not agent_id:
             return f"Failed to create agent: {resp}"
-        return f"Flow agent '{agent_name}' (ID: {agent_id}) created successfully."
+        return f"Flow agent '{self.agent_name}' (ID: {agent_id}) created successfully."
+
+
+class DenseFlowAgentBuilder(FlowAgentBuilder):
+    """Dense path: IndexMappingTool + QueryPlanningTool generates DSL with neural queries.
+
+    Works with knn_vector fields. The generated DSL is executed by the
+    agentic_query_translator search pipeline processor.
+    """
+
+    def build_tools(self) -> list:
+        params: dict = {
+            "model_id": self.model_id,
+            "response_filter": "$.output.message.content[0].text",
+        }
+        if self.embedding_model_id:
+            params["embedding_model_id"] = self.embedding_model_id
+        return [
+            {"type": "IndexMappingTool", "name": "IndexMappingTool"},
+            {"type": "QueryPlanningTool", "parameters": params},
+        ]
+
+
+class SparseFlowAgentBuilder(FlowAgentBuilder):
+    """Sparse path: NeuralSparseSearchTool executes neural_sparse search directly.
+
+    Works with rank_features fields. The agent performs the search itself —
+    no agentic_query_translator pipeline needed.
+    """
+
+    SPARSE_FIELD = "text_sparse"
+
+    def description(self) -> str:
+        return "Flow agent for sparse agentic search"
+
+    def _detect_source_fields(self) -> list:
+        """Read index mapping to find non-vector fields for source retrieval."""
+        try:
+            mapping_resp = self.client.indices.get_mapping(index=self.index_name)
+            props = next(iter(mapping_resp.values()), {}).get(
+                "mappings", {}
+            ).get("properties", {})
+            return [
+                f for f, spec in props.items()
+                if spec.get("type") not in ("rank_features", "knn_vector")
+            ]
+        except Exception:
+            return ["text", "headings", "source_file", "chunk_id", "page_number"]
+
+    def _detect_sparse_field(self) -> str:
+        """Find the rank_features field name from mapping."""
+        try:
+            mapping_resp = self.client.indices.get_mapping(index=self.index_name)
+            props = next(iter(mapping_resp.values()), {}).get(
+                "mappings", {}
+            ).get("properties", {})
+            for f, spec in props.items():
+                if spec.get("type") == "rank_features":
+                    return f
+        except Exception:
+            pass
+        return self.SPARSE_FIELD
+
+    def build_tools(self) -> list:
+        source_fields = self._detect_source_fields()
+        sparse_field = self._detect_sparse_field()
+        return [
+            {
+                "type": "NeuralSparseSearchTool",
+                "parameters": {
+                    "index": self.index_name,
+                    "embedding_field": sparse_field,
+                    "source_field": json.dumps(source_fields),
+                    "model_id": self.embedding_model_id,
+                },
+                "include_output_in_agent_response": True,
+            },
+        ]
+
+
+def create_flow_agent(
+    agent_name: str, model_id: str, embedding_model_id: str = "",
+    index_name: str = "", is_sparse: bool = False,
+) -> str:
+    """Create a flow agent for agentic search.
+
+    Args:
+        agent_name: Name for the agent.
+        model_id: Deployed LLM model ID (Bedrock Claude).
+        embedding_model_id: Model ID for embeddings (sparse tokenizer or dense encoder).
+        index_name: Target index (required for sparse).
+        is_sparse: True = NeuralSparseSearchTool (rank_features).
+                   False = QueryPlanningTool (knn_vector / dense).
+    """
+    if not model_id:
+        return "Error: model_id required."
+    if is_sparse and not index_name:
+        return "Error: --index required for sparse flow agent."
+
+    try:
+        client = create_client()
+        if is_sparse:
+            builder = SparseFlowAgentBuilder(
+                client, agent_name, model_id, embedding_model_id, index_name
+            )
+        else:
+            builder = DenseFlowAgentBuilder(
+                client, agent_name, model_id, embedding_model_id, index_name
+            )
+        return builder.create()
     except Exception as e:
         return f"Error creating flow agent: {e}"
 
@@ -552,35 +672,75 @@ def create_conversational_agent(agent_name: str, model_id: str, max_iterations: 
 
 
 def create_flow_agentic_pipeline(
-    pipeline_name: str, agent_id: str, index_name: str
+    pipeline_name: str, agent_id: str, index_name: str,
+    embedding_model_id: str = "", is_sparse: bool = False,
+    agentic_model_id: str = "",
 ) -> str:
     """Create a search pipeline for Flow Agent (stateless, low-latency).
 
-    Flow agents are optimized for REST APIs and search applications
-    requiring fast, independent queries.
+    Two modes:
+    - Dense (is_sparse=False): Uses agentic_query_translator so the agent generates
+      DSL. Optional neural_query_enricher injects model_id into neural queries.
+    - Sparse (is_sparse=True): Agent searches directly via NeuralSparseSearchTool.
+      No search pipeline needed. Agent metadata stored in index _meta for the
+      backend to call agent._execute at search time.
     """
     if not agent_id or not index_name:
         return "Error: agent_id and index_name required."
 
-    pipeline_body = {
-        "request_processors": [
-            {"agentic_query_translator": {"agent_id": agent_id}}
-        ],
-        "response_processors": [
-            {"agentic_context": {"dsl_query": True}}
-        ],
-    }
-
     try:
         client = create_client()
-        client.transport.perform_request(
-            "PUT", f"/_search/pipeline/{pipeline_name}", body=pipeline_body
-        )
-        client.indices.put_settings(
-            index=index_name,
-            body={"index": {"search.default_pipeline": pipeline_name}},
-        )
-        return f"Flow agent pipeline '{pipeline_name}' attached to '{index_name}'."
+
+        if is_sparse:
+            # Sparse: store agent config in index _meta; backend calls agent directly.
+            meta = {
+                "agentic_agent_id": agent_id,
+                "agentic_type": "sparse",
+            }
+            if agentic_model_id:
+                meta["agentic_model_id"] = agentic_model_id
+            client.indices.put_mapping(
+                index=index_name,
+                body={"_meta": meta},
+            )
+            # Clear any existing search pipeline that might interfere
+            try:
+                client.indices.put_settings(
+                    index=index_name,
+                    body={"index": {"search.default_pipeline": "_none"}},
+                )
+            except Exception:
+                pass
+            return (
+                f"Sparse agentic config stored in '{index_name}' _meta "
+                f"(agent_id: {agent_id}). Agent executes search directly "
+                f"via NeuralSparseSearchTool."
+            )
+        else:
+            # Dense: agentic_query_translator pipeline
+            request_processors: list = [
+                {"agentic_query_translator": {"agent_id": agent_id}}
+            ]
+            if embedding_model_id:
+                request_processors.append(
+                    {"neural_query_enricher": {"default_model_id": embedding_model_id}}
+                )
+
+            pipeline_body = {
+                "request_processors": request_processors,
+                "response_processors": [
+                    {"agentic_context": {"dsl_query": True}}
+                ],
+            }
+
+            client.transport.perform_request(
+                "PUT", f"/_search/pipeline/{pipeline_name}", body=pipeline_body
+            )
+            client.indices.put_settings(
+                index=index_name,
+                body={"index": {"search.default_pipeline": pipeline_name}},
+            )
+            return f"Flow agent pipeline '{pipeline_name}' attached to '{index_name}'."
     except Exception as e:
         return f"Failed to create flow agent pipeline: {e}"
 

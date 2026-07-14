@@ -1684,3 +1684,141 @@ def test_generate_suggestions_handles_empty_array():
     for s in structured:
         if "tags" in s["text"]:
             assert "tags:action" in s["text"]
+
+
+# ---------------------------------------------------------------------------
+# _strip_vector_fields — hidden fields (bboxes)
+# ---------------------------------------------------------------------------
+def test_strip_vector_fields_removes_bboxes():
+    source = {
+        "text": "Some content",
+        "chunk_id": 0,
+        "headings": ["Section 1"],
+        "bboxes": [{"b": 100, "r": 200, "page": 1, "l": 50, "t": 150}],
+    }
+    cleaned = _strip_vector_fields(source)
+
+    assert "text" in cleaned
+    assert "chunk_id" in cleaned
+    assert "headings" in cleaned
+    assert "bboxes" not in cleaned
+
+
+def test_strip_vector_fields_removes_bboxes_and_vectors():
+    source = {
+        "text": "Content",
+        "embedding": [0.1] * 128,
+        "bboxes": [{"b": 100}],
+    }
+    cleaned = _strip_vector_fields(source)
+
+    assert "text" in cleaned
+    assert "embedding" not in cleaned
+    assert "bboxes" not in cleaned
+
+
+# ---------------------------------------------------------------------------
+# generate_agent_prompts — document-style index detection
+# ---------------------------------------------------------------------------
+def test_generate_agent_prompts_document_index_with_llm():
+    """For document indices (text + headings/chunk_id), when an LLM is available,
+    the prompt sent to the LLM should include document content (headings/text)
+    rather than just field names and scalar values."""
+    import json as _json
+    _search_configs.clear()
+    _agent_prompts_cache.clear()
+
+    captured_prompts = []
+
+    class _FakeTransport:
+        def perform_request(self, method, url, body=None):
+            if "/_search/pipeline/" in url:
+                # Return the pipeline with agentic_query_translator
+                pipeline_name = url.split("/")[-1]
+                return {pipeline_name: {"request_processors": [
+                    {"agentic_query_translator": {"agent_id": "agent-1"}}
+                ]}}
+            if "/_plugins/_ml/agents/" in url:
+                # Return agent config with QueryPlanningTool
+                return {
+                    "type": "flow",
+                    "tools": [
+                        {"type": "IndexMappingTool"},
+                        {"type": "QueryPlanningTool", "parameters": {"model_id": "llm-model-1"}},
+                    ],
+                }
+            if "/_predict" in url:
+                # Capture the prompt sent to the LLM
+                user_prompt = body.get("parameters", {}).get("user_prompt", "")
+                captured_prompts.append(user_prompt)
+                # Return valid JSON response
+                llm_json = _json.dumps({
+                    "search": ["What is self-attention?", "How does multi-head attention work?",
+                               "What is the transformer architecture?", "How is positional encoding used?"],
+                    "chat": ["Summarize the paper", "What are the key contributions?",
+                             "How does this compare to RNNs?", "Explain the encoder-decoder structure"],
+                })
+                return {
+                    "inference_results": [{"output": [{"dataAsMap": {
+                        "output": {"message": {"content": [{"text": llm_json}]}}
+                    }}]}]
+                }
+            return {}
+
+    class _FakeIngest:
+        def get_pipeline(self, id):
+            return {}
+
+    class _FakeIndices:
+        def get_mapping(self, index):
+            return {"idx": {"mappings": {"properties": {
+                "text": {"type": "text"},
+                "headings": {"type": "text"},
+                "chunk_id": {"type": "integer"},
+                "source_file": {"type": "keyword"},
+                "embedding": {"type": "knn_vector", "dimension": 1024},
+            }}}}
+        def get_settings(self, index):
+            return {"idx": {"settings": {"index": {"search": {"default_pipeline": "my-pipeline"}}}}}
+
+    # Document-style index with text, headings, and chunk_id
+    client = _FakeClient(search_response={
+        "hits": {
+            "hits": [
+                {"_id": "1", "_score": 1.0, "_source": {
+                    "text": "The transformer model uses self-attention mechanisms.",
+                    "headings": ["Architecture"],
+                    "chunk_id": 0,
+                    "source_file": "paper.pdf",
+                }},
+                {"_id": "2", "_score": 1.0, "_source": {
+                    "text": "Multi-head attention enables the model to focus on different positions.",
+                    "headings": ["Multi-Head Attention"],
+                    "chunk_id": 1,
+                    "source_file": "paper.pdf",
+                }},
+            ],
+            "total": {"value": 2},
+        },
+        "took": 1,
+    })
+    client.indices = _FakeIndices()
+    client.ingest = _FakeIngest()
+    client.transport = _FakeTransport()
+
+    result = generate_agent_prompts(client, "idx")
+
+    # LLM-generated prompts should be content-aware
+    assert len(result["search"]) == 4
+    assert len(result["chat"]) == 4
+    assert "self-attention" in result["search"][0].lower()
+
+    # Verify the prompt sent to LLM uses document content, not just field names
+    assert len(captured_prompts) == 1
+    prompt = captured_prompts[0]
+    # Should include headings from the documents
+    assert "Architecture" in prompt or "Multi-Head Attention" in prompt
+    # Should include text excerpts
+    assert "transformer" in prompt.lower() or "attention" in prompt.lower()
+    # Should NOT be the field-name-based prompt (which would say "fields and sample values")
+    assert "text content" in prompt.lower() or "search index" in prompt.lower()

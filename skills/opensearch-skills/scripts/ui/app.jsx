@@ -1,621 +1,5 @@
-const { useEffect, useState, useRef, useCallback } = React;
-
-const TEMPLATES = [
-  { id: "document", label: "Document" },
-  { id: "ecommerce", label: "E-Commerce" },
-  { id: "agent", label: "Agent" },
-];
-
-const AGENT_PROMPTS_FALLBACK = {
-  search: [
-    "Find items with high ratings from recent years",
-    "Show me entries in a specific category",
-    "Top results matching a keyword",
-    "Items with particular attributes or filters",
-  ],
-  chat: [
-    "What are the highest rated items?",
-    "Tell me about the most popular categories",
-    "Recommend something interesting",
-    "Which items stand out in this collection?",
-  ],
-};
-
-function TemplateIcon({ id }) {
-  const size = 20;
-  if (id === "document") {
-    return (
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
-      </svg>
-    );
-  }
-  if (id === "ecommerce") {
-    return (
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
-      </svg>
-    );
-  }
-  if (id === "agent") {
-    return (
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-      </svg>
-    );
-  }
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Field role inference for ecommerce/media templates
-// ---------------------------------------------------------------------------
-const TITLE_HINTS = ["title", "name", "label", "heading", "subject", "primarytitle"];
-const IMAGE_HINTS = ["image", "img", "poster", "photo", "thumbnail", "picture", "cover", "avatar", "logo"];
-const DESC_HINTS = ["description", "summary", "overview", "abstract", "content", "body", "text", "plot"];
-const NOT_TITLE_HINTS = ["titletype", "type", "category", "kind"];
-
-function inferFieldRoles(source, schema, fieldOverrides) {
-  const roles = { title: null, image: null, description: null, tags: [], metrics: [] };
-  if (!source) return roles;
-
-  // Apply user overrides first
-  if (fieldOverrides) {
-    if (fieldOverrides.title && fieldOverrides.title !== "(none)" && source[fieldOverrides.title] != null) {
-      roles.title = { field: fieldOverrides.title, value: String(source[fieldOverrides.title]) };
-    }
-    if (fieldOverrides.description && fieldOverrides.description !== "(none)" && source[fieldOverrides.description] != null) {
-      roles.description = { field: fieldOverrides.description, value: String(source[fieldOverrides.description]) };
-    }
-    if (fieldOverrides.image && fieldOverrides.image !== "(none)" && source[fieldOverrides.image] != null) {
-      roles.image = { field: fieldOverrides.image, value: String(source[fieldOverrides.image]) };
-    }
-  }
-
-  const fieldCategories = schema?.field_categories || {};
-  const keywordFields = new Set(fieldCategories.keyword || []);
-  const numericFields = new Set(fieldCategories.numeric || []);
-
-  for (const [key, val] of Object.entries(source)) {
-    if (val == null || typeof val === "object") continue;
-    const lower = key.toLowerCase();
-    const strVal = String(val);
-
-    if (!roles.title && TITLE_HINTS.some((h) => lower.includes(h)) && !NOT_TITLE_HINTS.some((h) => lower === h) && strVal.length < 200) {
-      roles.title = { field: key, value: strVal };
-      continue;
-    }
-    if (!roles.image && (IMAGE_HINTS.some((h) => lower.includes(h)) || /^https?:\/\/.+\.(jpe?g|png|gif|webp|svg)/i.test(strVal))) {
-      roles.image = { field: key, value: strVal };
-      continue;
-    }
-    if (!roles.description && DESC_HINTS.some((h) => lower.includes(h)) && strVal.length > 20) {
-      roles.description = { field: key, value: strVal };
-      continue;
-    }
-    if (keywordFields.has(key) && strVal.length < 60) {
-      roles.tags.push({ field: key, value: strVal });
-    } else if (numericFields.has(key)) {
-      roles.metrics.push({ field: key, value: val });
-    }
-  }
-
-  // Fallback: use first short text as title, first long text as description
-  if (!roles.title || !roles.description) {
-    for (const [key, val] of Object.entries(source)) {
-      if (val == null || typeof val === "object") continue;
-      const strVal = String(val);
-      if (!roles.title && strVal.length >= 3 && strVal.length < 120 && /[a-zA-Z]/.test(strVal)) {
-        roles.title = { field: key, value: strVal };
-      } else if (!roles.description && strVal.length > 40 && !/^https?:\/\//.test(strVal)) {
-        roles.description = { field: key, value: strVal.slice(0, 300) };
-      }
-      if (roles.title && roles.description) break;
-    }
-  }
-
-  return roles;
-}
-
-// ---------------------------------------------------------------------------
-// Template: Ecommerce (grid cards with images, tags, metrics)
-// ---------------------------------------------------------------------------
-function EcommerceResults({ results, loading, schema, fieldOverrides, filterSource }) {
-  if (loading) return null;
-  return (
-    <div className="ecommerce-grid">
-      {results.map((item, idx) => {
-        const displaySource = filterSource ? filterSource(item.source) : item.source;
-        const roles = inferFieldRoles(displaySource, schema, fieldOverrides);
-        return (
-          <article className="ecommerce-card" key={item.id || idx} style={{ animationDelay: `${idx * 40}ms` }}>
-            {roles.image && (
-              <div className="ecommerce-image">
-                <img src={roles.image.value} alt="" loading="lazy" onError={(e) => { e.target.style.display = "none"; }} />
-              </div>
-            )}
-            <div className="ecommerce-body">
-              <div className="ecommerce-title-row">
-                <span className="ecommerce-rank">{idx + 1}</span>
-                <span className="ecommerce-title">{roles.title?.value || item.preview || item.id}</span>
-              </div>
-              {roles.description && roles.description.value !== (roles.title?.value || "") && (
-                <div className="ecommerce-desc">{roles.description.value}</div>
-              )}
-              {roles.tags.length > 0 && (
-                <div className="ecommerce-tags">
-                  {roles.tags.slice(0, 5).map((tag) => (
-                    <span key={tag.field} className="ecommerce-tag" title={tag.field}>{tag.value}</span>
-                  ))}
-                </div>
-              )}
-              <div className="ecommerce-footer">
-                {roles.metrics.slice(0, 3).map((m) => (
-                  <span key={m.field} className="ecommerce-metric" title={m.field}>
-                    {m.field}: <strong>{m.value}</strong>
-                  </span>
-                ))}
-                <span className="score">score {Number(item.score || 0).toFixed(3)}</span>
-              </div>
-            </div>
-          </article>
-        );
-      })}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Template: Document Search (list with large previews, score bars)
-// ---------------------------------------------------------------------------
-function DocumentResults({ results, loading, filterSource, schema, fieldOverrides }) {
-  if (loading) return null;
-  return (
-    <div className="results doc-results">
-      {results.map((item, idx) => {
-        const s = item.source || {};
-        const displaySource = filterSource ? filterSource(s) : s;
-        const roles = inferFieldRoles(displaySource, schema, fieldOverrides);
-        const title = roles.title?.value || item.preview || "Untitled";
-        const metaParts = [];
-        roles.tags.slice(0, 3).forEach((tag) => metaParts.push(tag.value));
-        roles.metrics.slice(0, 2).forEach((m) => metaParts.push(`${m.field}: ${m.value}`));
-        const metaLine = metaParts.join(" · ");
-        const score = Number(item.score || 0).toFixed(4);
-        return (
-          <article className="doc-card" key={item.id || idx} style={{ animationDelay: `${idx * 35}ms` }}>
-            <span className="doc-rank">{idx + 1}</span>
-            <div className="doc-content">
-              <div className="doc-title">{title}</div>
-              {metaLine && <div className="doc-meta">{metaLine}</div>}
-              <div className="doc-details-row">
-                <details className="doc-details">
-                <summary>View details</summary>
-                <div className="doc-details-content">
-                  <div className="doc-detail-row"><span className="doc-detail-label">ID:</span> <code>{item.id || "(none)"}</code></div>
-                  <pre>{JSON.stringify(displaySource, null, 2)}</pre>
-                </div>
-              </details>
-              <span className="doc-score-inline">{score}</span>
-              </div>
-            </div>
-          </article>
-        );
-      })}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Template: Agentic Chat
-// ---------------------------------------------------------------------------
-// Generate a conversational summary from search results
-function generateChatSummary(query, results, total, schema) {
-  if (!results || results.length === 0) {
-    return `I couldn't find any results matching "${query}". Try rephrasing your question or using different keywords.`;
-  }
-
-  const count = total ?? results.length;
-  const topItems = results.slice(0, 5);
-
-  let summary = `I found ${count} result${count !== 1 ? "s" : ""} for your query. `;
-
-  if (count <= 3) {
-    summary += `Here's what I found:\n\n`;
-  } else {
-    summary += `Here are the top matches:\n\n`;
-  }
-
-  topItems.forEach((item, i) => {
-    const s = item.source || {};
-    const roles = inferFieldRoles(s, schema, null);
-    const title = roles.title?.value || item.preview || "Untitled";
-    const score = Number(item.score || 0);
-    const tags = roles.tags.slice(0, 2).map((t) => t.value).join(", ");
-    const tagsStr = tags ? ` ${"\u2022"} ${tags}` : "";
-
-    summary += `${i + 1}. **${title}**`;
-    summary += `${tagsStr}`;
-    if (score > 0) summary += ` ${"\u2022"} Relevance: ${score.toFixed(2)}`;
-    summary += `\n`;
-    if (roles.description && roles.description.value !== title) {
-      const shortDesc = roles.description.value.length > 150 ? roles.description.value.slice(0, 147) + "..." : roles.description.value;
-      summary += `   ${shortDesc}\n`;
-    }
-    summary += `\n`;
-  });
-
-  if (count > 5) {
-    summary += `...and ${count - 5} more result${count - 5 !== 1 ? "s" : ""}.`;
-  }
-
-  return summary;
-}
-
-// Simple markdown-like rendering (bold only)
-function renderChatText(text) {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={i}>{part.slice(2, -2)}</strong>;
-    }
-    return part;
-  });
-}
-
-function AgenticChat({ messages, loading, onPromptClick, agentPrompts, agentPromptsLoaded, schema }) {
-  const endRef = useRef(null);
-  useEffect(() => {
-    if (messages.length > 0) endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading]);
-
-  return (
-    <div className="chat-messages">
-      {messages.length === 0 && (
-        <div className="chat-empty">
-          <div className="chat-empty-icon">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{opacity: 0.3}}>
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-            </svg>
-          </div>
-          <div className="chat-empty-title">Conversational Search</div>
-          <div className="chat-empty-desc">Ask follow-up questions and the agent will remember the context of your conversation.</div>
-          <div className="suggested-prompts">
-            {(agentPrompts?.chat?.length > 0 ? agentPrompts.chat : (agentPromptsLoaded ? AGENT_PROMPTS_FALLBACK.chat : [])).map((p) => (
-              <button key={p} className="suggested-prompt" onClick={() => onPromptClick && onPromptClick(p)}>{p}</button>
-            ))}
-          </div>
-        </div>
-      )}
-      {messages.map((msg, idx) => (
-        <div key={idx} className={`chat-bubble chat-${msg.role}`}>
-          {msg.role === "user" ? (
-            <div className="chat-user-text">{msg.text}</div>
-          ) : (
-            <div className="chat-assistant">
-              {msg.results && msg.results.length > 0 ? (
-                <>
-                  {msg.agent_steps_summary && (
-                    <details className="chat-agent-reasoning" open>
-                      <summary>Agent reasoning</summary>
-                      <div className="chat-reasoning-content">
-                        <div className="chat-reasoning-section">
-                          <div className="chat-reasoning-label">Steps</div>
-                          <pre className="chat-reasoning-pre">{msg.agent_steps_summary}</pre>
-                        </div>
-                      </div>
-                    </details>
-                  )}
-                  <div className="chat-summary">
-                    {renderChatText(msg.summary || generateChatSummary(msg.query, msg.results, msg.total, schema))}
-                  </div>
-                  <div className="chat-meta-bar">
-                    <span>{msg.total ?? msg.results.length} result(s) {"\u2022"} {msg.took_ms ?? 0}ms</span>
-                    {msg.capability && <span className="chat-cap-badge">{msg.capability}</span>}
-                  </div>
-                  <details className="chat-sources">
-                    <summary>View source documents ({msg.results.length})</summary>
-                    <div className="chat-source-list">
-                      {msg.results.slice(0, 10).map((item, i) => (
-                        <div key={i} className="chat-source-item">
-                          <span className="chat-source-num">{i + 1}</span>
-                          <div className="chat-source-body">
-                            <div className="chat-source-title">{item.source?.title || item.source?.name || item.preview || item.id}</div>
-                            <pre>{JSON.stringify(item.source, null, 2)}</pre>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </details>
-                  {msg.dsl_query && (
-                    <details className="chat-agent-reasoning">
-                      <summary>Generated DSL</summary>
-                      <div className="chat-reasoning-content">
-                        <div className="chat-reasoning-section">
-                          <pre className="chat-reasoning-pre">{(() => { try { return JSON.stringify(JSON.parse(msg.dsl_query), null, 2); } catch(e) { return msg.dsl_query; } })()}</pre>
-                        </div>
-                      </div>
-                    </details>
-                  )}
-                </>
-              ) : msg.error ? (
-                <div className="chat-error">{msg.error}</div>
-              ) : (
-                <div className="chat-summary">I couldn't find any results for that query. Try rephrasing your question.</div>
-              )}
-            </div>
-          )}
-        </div>
-      ))}
-      {loading && (
-        <div className="chat-bubble chat-assistant">
-          <div className="chat-typing">
-            <span className="chat-typing-dot"></span>
-            <span className="chat-typing-dot"></span>
-            <span className="chat-typing-dot"></span>
-          </div>
-        </div>
-      )}
-      <div ref={endRef} />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Custom Dropdown for version/index selection
-// ---------------------------------------------------------------------------
-function IndexDropdown({ value, options, onChange, placeholder }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-
-  useEffect(() => {
-    const handleClick = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
-
-  const selected = options.find((o) => o.name === value);
-
-  return (
-    <div className="idx-dropdown" ref={ref}>
-      <button className="idx-dropdown-trigger" onClick={() => setOpen(!open)} type="button">
-        <span className="idx-dropdown-value">{selected ? selected.name : (placeholder || "Select...")}</span>
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M6 9l6 6 6-6"/>
-        </svg>
-      </button>
-      {open && (
-        <div className="idx-dropdown-menu">
-          {options.map((opt) => (
-            <button
-              key={opt.name}
-              className={`idx-dropdown-item ${opt.name === value ? "selected" : ""}`}
-              onClick={() => { onChange(opt.name); setOpen(false); }}
-              type="button"
-            >
-              <div className="idx-dropdown-item-name">{opt.name}</div>
-              <div className="idx-dropdown-item-meta">{opt.description || `${opt.docs} docs`}</div>
-              <div className="idx-dropdown-item-meta">{[opt.created, opt.docs ? `${opt.docs} docs` : ""].filter(Boolean).join(" · ")}</div>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// View Mode Selector (List / Compare)
-// ---------------------------------------------------------------------------
-function ViewModeSelector({ enabled, onToggle }) {
-  return (
-    <div className="view-mode-seg" role="radiogroup" aria-label="View mode">
-      <button
-        className={`view-mode-btn ${!enabled ? "active" : ""}`}
-        onClick={() => onToggle(false)}
-        role="radio"
-        aria-checked={!enabled}
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/>
-        </svg>
-        Single
-      </button>
-      <button
-        className={`view-mode-btn ${enabled ? "active" : ""}`}
-        onClick={() => onToggle(true)}
-        role="radio"
-        aria-checked={enabled}
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="3" y="3" width="7" height="18" rx="1"/><rect x="14" y="3" width="7" height="18" rx="1"/>
-        </svg>
-        Compare
-      </button>
-    </div>
-  );
-}
-
-
-// ---------------------------------------------------------------------------
-// ResultPane – one half of the comparison view
-// ---------------------------------------------------------------------------
-function ResultPane({ label, indexName, results, loading, error, stats, queryMode, capability, usedSemantic, fallbackReason, activeTemplate, schema, fieldOverrides, filterSource }) {
-  const capabilityDesc = {
-    exact: "Lexical BM25",
-    semantic: "Semantic Vector",
-    structured: "Structured Filter",
-    combined: "Hybrid BM25 + Dense Vector",
-    autocomplete: "Autocomplete",
-    fuzzy: "Fuzzy Match",
-    manual: "Manual Query",
-  };
-
-  const desc = capability ? (capabilityDesc[capability] || capability) : "";
-
-  return (
-    <div className="result-pane">
-      <div className="result-pane-header">
-        <span className="result-pane-name">{indexName || label}</span>
-        {desc && <span className="result-pane-desc">{desc}</span>}
-        <span className="result-pane-stats">{stats}</span>
-      </div>
-
-      {loading && (
-        <div className="result-pane-loading">
-          <div className="loading-bar"><div className="loading-bar-progress"></div></div>
-          <span className="loading-text">Searching...</span>
-        </div>
-      )}
-
-      {error && <div className="result-pane-error">{error}</div>}
-
-      {!loading && !error && (
-        <div className="result-pane-results">
-          {activeTemplate === "ecommerce" || activeTemplate === "media" ? (
-            <EcommerceResults results={results} loading={false} schema={schema} fieldOverrides={fieldOverrides} filterSource={filterSource} />
-          ) : (
-            <DocumentResults results={results} loading={false} filterSource={filterSource} schema={schema} fieldOverrides={fieldOverrides} />
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-// ---------------------------------------------------------------------------
-// Comparison View — side-by-side search across two selected indices
-// ---------------------------------------------------------------------------
-function ComparisonView({ query, searchSize, activeTemplate, schema, fieldOverrides, filterSource, compareIndex1, compareIndex2 }) {
-  // Index 1 pane state
-  const [index1Results, setIndex1Results] = useState([]);
-  const [index1Loading, setIndex1Loading] = useState(false);
-  const [index1Error, setIndex1Error] = useState("");
-  const [index1Stats, setIndex1Stats] = useState("Ready");
-  const [index1QueryMode, setIndex1QueryMode] = useState("");
-  const [index1Capability, setIndex1Capability] = useState("");
-  const [index1UsedSemantic, setIndex1UsedSemantic] = useState(false);
-  const [index1FallbackReason, setIndex1FallbackReason] = useState("");
-
-  // Index 2 pane state
-  const [index2Results, setIndex2Results] = useState([]);
-  const [index2Loading, setIndex2Loading] = useState(false);
-  const [index2Error, setIndex2Error] = useState("");
-  const [index2Stats, setIndex2Stats] = useState("Ready");
-  const [index2QueryMode, setIndex2QueryMode] = useState("");
-  const [index2Capability, setIndex2Capability] = useState("");
-  const [index2UsedSemantic, setIndex2UsedSemantic] = useState(false);
-  const [index2FallbackReason, setIndex2FallbackReason] = useState("");
-
-  const runComparisonSearch = async (queryText) => {
-    setIndex1Loading(true);
-    setIndex2Loading(true);
-    setIndex1Error("");
-    setIndex2Error("");
-
-    const makeRequest = (indexName) => {
-      const qs = new URLSearchParams();
-      qs.set("index", indexName);
-      qs.set("q", queryText);
-      qs.set("size", String(searchSize));
-      qs.set("debug", "1");
-      return fetch(`/api/search?${qs.toString()}`).then(r => r.json());
-    };
-
-    const [result1, result2] = await Promise.allSettled([
-      makeRequest(compareIndex1),
-      makeRequest(compareIndex2),
-    ]);
-
-    // Handle index 1 result
-    if (result1.status === "fulfilled") {
-      const data = result1.value;
-      if (data.error) {
-        setIndex1Error(data.error);
-        setIndex1Results([]);
-      } else {
-        setIndex1Results(data.hits || []);
-        setIndex1Stats(`${data.total ?? 0} hits — ${data.took_ms ?? 0}ms`);
-        setIndex1QueryMode(data.query_mode || "");
-        setIndex1Capability(data.capability || "");
-        setIndex1UsedSemantic(Boolean(data.used_semantic));
-        setIndex1FallbackReason(data.fallback_reason || "");
-      }
-    } else {
-      setIndex1Error(result1.reason?.message || "Request failed");
-      setIndex1Results([]);
-    }
-    setIndex1Loading(false);
-
-    // Handle index 2 result
-    if (result2.status === "fulfilled") {
-      const data = result2.value;
-      if (data.error) {
-        setIndex2Error(data.error);
-        setIndex2Results([]);
-      } else {
-        setIndex2Results(data.hits || []);
-        setIndex2Stats(`${data.total ?? 0} hits — ${data.took_ms ?? 0}ms`);
-        setIndex2QueryMode(data.query_mode || "");
-        setIndex2Capability(data.capability || "");
-        setIndex2UsedSemantic(Boolean(data.used_semantic));
-        setIndex2FallbackReason(data.fallback_reason || "");
-      }
-    } else {
-      setIndex2Error(result2.reason?.message || "Request failed");
-      setIndex2Results([]);
-    }
-    setIndex2Loading(false);
-  };
-
-  // Trigger search when query or searchSize changes
-  useEffect(() => {
-    if (query && query.trim()) {
-      runComparisonSearch(query.trim());
-    }
-  }, [query, searchSize]);
-
-  return (
-    <div>
-      {/* Side-by-side result panes */}
-      <div className="comparison-panes">
-        <ResultPane
-          label="Index 1"
-          indexName={compareIndex1}
-          results={index1Results}
-          loading={index1Loading}
-          error={index1Error}
-          stats={index1Stats}
-          queryMode={index1QueryMode}
-          capability={index1Capability}
-          usedSemantic={index1UsedSemantic}
-          fallbackReason={index1FallbackReason}
-          activeTemplate={activeTemplate}
-          schema={schema}
-          fieldOverrides={fieldOverrides}
-          filterSource={filterSource}
-        />
-        <ResultPane
-          label="Index 2"
-          indexName={compareIndex2}
-          results={index2Results}
-          loading={index2Loading}
-          error={index2Error}
-          stats={index2Stats}
-          queryMode={index2QueryMode}
-          capability={index2Capability}
-          usedSemantic={index2UsedSemantic}
-          fallbackReason={index2FallbackReason}
-          activeTemplate={activeTemplate}
-          schema={schema}
-          fieldOverrides={fieldOverrides}
-          filterSource={filterSource}
-        />
-      </div>
-    </div>
-  );
-}
+// Loaded as a classic <script type="text/babel"> in index.html; all UI
+// files share one global scope (no bundler). Load order is defined there.
 
 // ---------------------------------------------------------------------------
 // Main App
@@ -652,6 +36,18 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
 
+  // View toggle: "search" (default) or "ingestion"
+  const [activeView, setActiveView] = useState("search");
+  // Tracks whether we've already auto-switched to ingestion for the current active job.
+  // Prevents the poll from yanking the user back if they manually switch to Search.
+  const didAutoSwitchRef = useRef(false);
+  const [uiMode, setUiMode] = useState("full");  // full | ingestion | search (from /api/config)
+  const [showIngestionTab, setShowIngestionTab] = useState(false);  // server-computed: local endpoint + local chunks
+  const [ingestionChunkIndex, setIngestionChunkIndex] = useState("");  // resolved chunk set for current index (same-name or provenance parent)
+  const [ingestionIndex, setIngestionIndex] = useState("");  // chunk set currently shown in the ingestion view (user can browse cross-index)
+  const [ingestionIndexOptions, setIngestionIndexOptions] = useState([]);  // all chunk sets under .opensearch/chunks (from /api/ingestion-indices)
+  const [ingestionStatus, setIngestionStatus] = useState(null);
+
   // Chat / agent state
   const [chatMessages, setChatMessages] = useState([]);
   const [memoryId, setMemoryId] = useState(null);
@@ -667,6 +63,49 @@ function App() {
   useEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode);
   }, [darkMode]);
+
+  // Poll ingestion status + endpoint every 2s
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        // Ingestion status
+        const res = await fetch("/api/ingestion-status");
+        if (res.ok) {
+          const data = await res.json();
+          setIngestionStatus(data);
+          if (data.active && !didAutoSwitchRef.current && activeView === "search" && uiMode !== "search" && (showIngestionTab || uiMode === "ingestion")) {
+            setActiveView("ingestion");
+            didAutoSwitchRef.current = true;
+          }
+          // Reset the flag when ingestion finishes so next job can auto-switch again
+          if (!data.active) {
+            didAutoSwitchRef.current = false;
+          }
+        }
+        // Refresh endpoint (picks up connect-ui changes)
+        const idxParam = indexName.trim() ? `?index=${encodeURIComponent(indexName.trim())}` : "";
+        const cfgRes = await fetch(`/api/config${idxParam}`);
+        if (cfgRes.ok) {
+          const cfg = await cfgRes.json();
+          setBackendEndpoint(String(cfg.endpoint || "").trim());
+          setBackendConnected(Boolean(cfg.connected));
+          setShowIngestionTab(Boolean(cfg.show_ingestion_tab));
+          // Resolved chunk set for the current index (same-name or provenance
+          // parent). The ingestion view defaults here; the user may browse to
+          // any other chunk set via the ingestion-view picker (ingestionIndex).
+          setIngestionChunkIndex(String(cfg.ingestion_chunk_index || ""));
+          const mode = String(cfg.ui_mode || "full");
+          setUiMode(mode);
+          // In ingestion-only mode, default to the ingestion view.
+          if (mode === "ingestion") setActiveView(v => (v === "search" ? "ingestion" : v));
+          if (mode === "search") setActiveView(v => (v === "ingestion" ? "search" : v));
+        }
+      } catch (e) { /* ignore */ }
+    };
+    poll();
+    const interval = setInterval(poll, 2000);
+    return () => clearInterval(interval);
+  }, [activeView, uiMode, indexName, showIngestionTab]);
 
   // Field mapping overrides
   const [titleField, setTitleField] = useState("(none)");
@@ -720,7 +159,7 @@ function App() {
   };
 
   // ---- Schema fetch ----
-  const schemaLoadedRef = useRef(false);
+  const schemaLoadedRef = useRef("");  // last index the suggested template was applied for
   const fetchSchema = useCallback(async (index) => {
     if (!index) return;
     try {
@@ -732,8 +171,11 @@ function App() {
         if (data.agentic_agent_type) {
           setAgenticMode(data.agentic_agent_type === "conversational" ? "chat" : "search");
         }
-        if (!schemaLoadedRef.current) {
-          schemaLoadedRef.current = true;
+        // Apply the suggested template once per index. Re-applies when the
+        // index changes (so switching indices picks up the new AUTO template),
+        // but not on same-index refetches (so a manual template choice sticks).
+        if (schemaLoadedRef.current !== index) {
+          schemaLoadedRef.current = index;
           const suggested = data.suggested_template || "document";
           setActiveTemplate(suggested);
           if (suggested === "agent") {
@@ -836,7 +278,8 @@ function App() {
       const data = await res.json();
       const list = Array.isArray(data.indices) ? data.indices : [];
       setAvailableIndices(list);
-      if (list.length >= 2) setComparisonAvailable(true);
+      // Comparison is a search feature — only cluster-backed indices count.
+      if (list.filter((i) => i.source !== "local").length >= 2) setComparisonAvailable(true);
     } catch (_) {}
   };
 
@@ -846,9 +289,20 @@ function App() {
   useEffect(() => {
     const idx = indexName.trim();
     if (!idx) return;
+    // Reset the ingestion-view picker so it re-defaults to the new index's
+    // resolved chunk set (via ingestion_chunk_index from /api/config).
+    setIngestionIndex("");
     const timer = setTimeout(() => fetchSchema(idx), 400);
     return () => clearTimeout(timer);
   }, [indexName, fetchSchema]);
+
+  // Load all chunk sets for the ingestion-view cross-index picker.
+  useEffect(() => {
+    fetch("/api/ingestion-indices")
+      .then(r => r.json())
+      .then(d => setIngestionIndexOptions(Array.isArray(d.indices) ? d.indices : []))
+      .catch(() => {});
+  }, [ingestionChunkIndex]);
 
   // ---- Autocomplete ----
   useEffect(() => {
@@ -1022,6 +476,10 @@ function App() {
   // Derive field lists from schema for field mapping dropdowns
   const allFields = schema?.field_specs ? Object.keys(schema.field_specs).filter((f) => !f.endsWith(".keyword")) : [];
   const textFields = (schema?.field_categories?.text || []);
+  // Cluster-backed indices only for the search pickers. Chunk-only entries
+  // (source==="local", i.e. .opensearch/chunks/<name> with no cluster index)
+  // aren't searchable — they belong to the Ingestion view's chunk-set picker.
+  const searchableIndices = availableIndices.filter((i) => i.source !== "local");
 
   return (
     <div className={`shell template-${activeTemplate}`}>
@@ -1035,7 +493,31 @@ function App() {
           OpenSearch
         </div>
         <div className="divider"></div>
-        <div className="title">Launchpad</div>
+        {(() => {
+          // Ingestion tab is driven by a single server-computed flag
+          // (show_ingestion_tab = local endpoint + local chunks). Search is
+          // always the default view. uiMode "ingestion" is the launch-time
+          // ingestion-only case, which hides search.
+          const ingestionAvailable = showIngestionTab || uiMode === "ingestion";
+          const searchAvailable = uiMode !== "ingestion";
+          return (
+            <div className="view-toggle-bar">
+              {ingestionAvailable && (
+                <button
+                  className={`view-toggle-btn ${activeView === "ingestion" ? "active" : ""}`}
+                  onClick={() => setActiveView("ingestion")}
+                >
+                  Ingestion
+                </button>
+              )}
+              {searchAvailable && (
+                <button className={`view-toggle-btn ${activeView === "search" ? "active" : ""}`} onClick={() => setActiveView("search")}>
+                  Search
+                </button>
+              )}
+            </div>
+          );
+        })()}
         <div className="topbar-right">
           <div className={`conn-badge ${backendConnected ? "connected" : "disconnected"}`}>
             <span className="conn-dot"></span>
@@ -1053,9 +535,48 @@ function App() {
 
       {showSettings && (
         <div className="settings-panel">
+          {activeView === "ingestion" ? (
+            /* Ingestion settings: chunk-set selection only. Field mapping,
+               metadata, comparison, and template are search concepts and are
+               intentionally hidden here. */
+            <div className="idx-row">
+              <div className="field-group">
+                <label>Chunk</label>
+                {ingestionIndexOptions.length > 0 ? (
+                  <IndexDropdown
+                    value={ingestionIndex || ingestionChunkIndex}
+                    options={ingestionIndexOptions.map((o) => ({
+                      name: o.name,
+                      description: `${o.chunks} chunks`,
+                    }))}
+                    onChange={(v) => setIngestionIndex(v)}
+                    placeholder="Select chunk set..."
+                  />
+                ) : (
+                  <span className="idx-empty-note">No local chunk sets.</span>
+                )}
+              </div>
+              <div className="spacer"></div>
+              <div className="field-group">
+                <label>Theme</label>
+                <div className="theme-seg">
+                  <button className={`theme-seg-btn ${!darkMode ? "active" : ""}`} onClick={() => setDarkMode(false)} aria-label="Light mode">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+                  </button>
+                  <button className={`theme-seg-btn ${darkMode ? "active" : ""}`} onClick={() => setDarkMode(true)} aria-label="Dark mode">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+          <>
           {/* Index / Size / View mode row */}
+          {/* Search operates on cluster-backed indices only; chunk-only
+              (source==="local") entries are inspectable in the Ingestion view,
+              not searchable, so they're filtered out of the search pickers. */}
           <div className="idx-row">
-            {availableIndices.length >= 2 && activeTemplate !== "agent" && (
+            {searchableIndices.length >= 2 && activeTemplate !== "agent" && (
               <div className="field-group">
                 <label>View</label>
                 <ViewModeSelector
@@ -1065,7 +586,7 @@ function App() {
                     setComparisonEnabled(true);
                     if (!compareIndex1 || !compareIndex2) {
                       const current = indexName.trim();
-                      const names = availableIndices.map((i) => i.name);
+                      const names = searchableIndices.map((i) => i.name);
                       const other = names.find((n) => n !== current) || "";
                       if (!compareIndex1) setCompareIndex1(current || names[0] || "");
                       if (!compareIndex2) setCompareIndex2(other || names[1] || "");
@@ -1082,10 +603,10 @@ function App() {
             )}
             <div className="field-group">
               <label>Index</label>
-              {availableIndices.length > 0 ? (
+              {searchableIndices.length > 0 ? (
                 <IndexDropdown
                   value={comparisonEnabled ? compareIndex1 : indexName}
-                  options={comparisonEnabled ? availableIndices.filter((i) => i.name !== compareIndex2) : availableIndices}
+                  options={comparisonEnabled ? searchableIndices.filter((i) => i.name !== compareIndex2) : searchableIndices}
                   onChange={(v) => {
                     if (comparisonEnabled) {
                       setCompareIndex1(v);
@@ -1095,6 +616,13 @@ function App() {
                       fetchSchema(v);
                       setChatMessages([]);
                       setMemoryId(null);
+                      // Clear the previous index's query text, results, and
+                      // autocomplete so switching indices starts clean.
+                      setQuery("");
+                      setAutocompleteOptions([]);
+                      setResults([]);
+                      setStats("Ready");
+                      setRagAnswer("");
                     }
                   }}
                   placeholder="Select index..."
@@ -1110,7 +638,7 @@ function App() {
                 <label>Index 2</label>
                 <IndexDropdown
                   value={compareIndex2}
-                  options={availableIndices.filter((i) => i.name !== compareIndex1)}
+                  options={searchableIndices.filter((i) => i.name !== compareIndex1)}
                   onChange={(v) => { setCompareIndex2(v); loadSuggestions(v); fetchSchema(v); }}
                   placeholder="Select..."
                 />
@@ -1240,9 +768,33 @@ function App() {
               </div>
             </div>
           )}
+          </>
+          )}
         </div>
       )}
 
+      {activeView === "ingestion" && (
+        <section className="search-panel">
+          {!backendEndpoint.includes("localhost") && backendEndpoint ? (
+            <div className="ingestion-empty">
+              <p>Ingestion preview is available on local only.</p>
+              <p style={{fontSize: "11px", marginTop: "8px", color: "#999"}}>Switch to Search view to query the cloud index, or reconnect to localhost for chunk inspection.</p>
+            </div>
+          ) : (() => {
+            // Ingestion view is a chunk-inspection add-on. It defaults to the
+            // current index's resolved chunk set (same-name or provenance
+            // parent), but the user may browse ANY chunk set cross-index.
+            const effectiveIngestionIndex = ingestionIndex || ingestionChunkIndex;
+            return (
+              <>
+                <IngestionView status={ingestionStatus} selectedIndex={effectiveIngestionIndex} />
+              </>
+            );
+          })()}
+        </section>
+      )}
+
+      {activeView === "search" && (
       <section className={`search-panel ${activeTemplate === "agent" && agenticMode === "chat" ? "chat-layout" : ""}`}>
             {/* Search bar and suggestions — hidden in chat mode */}
             {!(activeTemplate === "agent" && agenticMode === "chat") && (
@@ -1440,6 +992,7 @@ function App() {
               </>
             )}
       </section>
+      )}
     </div>
   );
 }
