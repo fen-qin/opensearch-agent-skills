@@ -183,20 +183,22 @@ Update state: `"ingest_pipeline_name": "bedrock-embedding-pipeline"`
 PUT <collection-endpoint>/<index-name>
 {
   "settings": {
-    "index": { "knn": true, "knn.space_type": "cosinesimil", "default_pipeline": "bedrock-embedding-pipeline" }
+    "index.knn": true,
+    "index.default_pipeline": "bedrock-embedding-pipeline"
   },
   "mappings": {
     "properties": {
       "<text-field>": { "type": "text" },
       "<vector-field>": {
         "type": "knn_vector",
-        "dimension": 1024,
-        "method": { "name": "hnsw", "space_type": "cosinesimil", "engine": "faiss" }
+        "dimension": 1024
       }
     }
   }
 }
 ```
+
+> **Note:** Omit `engine`/`mode` on NextGen — they are rejected with `Field parameter 'engine' is not supported`. `space_type` is optional (defaults to L2); to use another metric, add it at the field level, e.g. `"space_type": "cosinesimil"`.
 
 Update state: `"index_name": "<index-name>"`
 
