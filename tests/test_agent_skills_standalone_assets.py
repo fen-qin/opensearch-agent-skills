@@ -60,44 +60,105 @@ class TestUIAssetsStandalone:
 # ---------------------------------------------------------------------------
 # Sample data
 # ---------------------------------------------------------------------------
+# The built-in IMDB sample dataset is fetched on demand from IMDb's dataset
+# export (https://datasets.imdbws.com/title.basics.tsv.gz) and cached
+# locally rather than shipped as a static file. These tests mock the network
+# call so they run offline and don't depend on IMDb's live dataset.
+_SAMPLE_TSV_BYTES = (
+    b"tconst\ttitleType\tprimaryTitle\toriginalTitle\tisAdult\tstartYear\t"
+    b"endYear\truntimeMinutes\tgenres\n"
+    b"tt0000001\tshort\tCarmencita\tCarmencita\t0\t1894\t\\N\t1\tDocumentary,Short\n"
+)
+
+
+def _make_fake_gzip_response(payload: bytes):
+    """Build a gzip-compressed byte string mimicking the IMDb .gz response body."""
+    import gzip
+    import io
+
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+        gz.write(payload)
+    return buf.getvalue()
+
+
 class TestSampleDataStandalone:
-    """Verify IMDB sample data is bundled and samples.py finds it locally."""
+    """Verify the IMDB sample dataset is fetched and cached on demand,
+    rather than requiring a bundled copy inside the skill."""
 
-    IMDB_TSV = _SCRIPTS_DIR / "sample_data" / "imdb.title.basics.tsv"
+    def test_sample_data_not_bundled(self):
+        """The skill ships no static sample_data/ directory; sample data
+        is fetched at runtime instead."""
+        assert not (_SCRIPTS_DIR / "sample_data").exists(), (
+            "sample_data/ should not be bundled; samples.py fetches data at runtime"
+        )
 
-    def test_sample_data_directory_exists(self):
-        assert (_SCRIPTS_DIR / "sample_data").is_dir()
-
-    def test_imdb_tsv_exists(self):
-        assert self.IMDB_TSV.is_file(), f"IMDB TSV missing: {self.IMDB_TSV}"
-
-    def test_imdb_tsv_not_empty(self):
-        assert self.IMDB_TSV.stat().st_size > 0
-
-    def test_imdb_tsv_has_header_row(self):
-        with open(self.IMDB_TSV, "r") as f:
-            header = f.readline().strip()
-        assert "tconst" in header, f"Unexpected header: {header}"
-
-    def test_load_sample_builtin_imdb_succeeds(self):
+    def test_load_sample_builtin_imdb_downloads_and_caches(self, monkeypatch, tmp_path):
+        import io
         import json
-        from lib.samples import load_sample_builtin_imdb
 
-        result = json.loads(load_sample_builtin_imdb())
+        from lib import samples
+
+        cache_dir = tmp_path / "cache"
+        monkeypatch.setattr(samples, "_imdb_cache_dir", lambda: cache_dir)
+
+        gz_bytes = _make_fake_gzip_response(_SAMPLE_TSV_BYTES)
+
+        class _FakeOpener:
+            def open(self, req, timeout=None):
+                return io.BytesIO(gz_bytes)
+
+        monkeypatch.setattr(samples, "_validate_url", lambda url: None)
+        monkeypatch.setattr(samples, "_build_safe_opener", lambda: _FakeOpener())
+
+        result = json.loads(samples.load_sample_builtin_imdb())
         assert "error" not in result, f"load_sample_builtin_imdb failed: {result}"
         assert result["status"] == "loaded"
         assert result["record_count"] > 0
 
-    def test_builtin_imdb_resolves_to_local_path(self):
-        import json
-        from lib.samples import load_sample_builtin_imdb
+        cached_file = cache_dir / samples._IMDB_SAMPLE_FILENAME
+        assert cached_file.is_file(), "Downloaded sample should be cached to disk"
 
-        result = json.loads(load_sample_builtin_imdb())
-        source = result.get("source", "")
-        # Must resolve inside the skill, not opensearch_orchestrator/
-        assert "opensearch_orchestrator" not in source, (
-            f"IMDB sample resolved outside the skill: {source}"
-        )
+    def test_load_sample_builtin_imdb_uses_cache_without_reopening_network(
+        self, monkeypatch, tmp_path
+    ):
+        """Second call should read from cache and must not hit the network."""
+        import json
+
+        from lib import samples
+
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir(parents=True)
+        cached_file = cache_dir / samples._IMDB_SAMPLE_FILENAME
+        cached_file.write_text(_SAMPLE_TSV_BYTES.decode("utf-8"))
+
+        monkeypatch.setattr(samples, "_imdb_cache_dir", lambda: cache_dir)
+
+        def _fail_download(dest):
+            raise AssertionError("Should not attempt download when cache exists")
+
+        monkeypatch.setattr(samples, "_download_imdb_sample", _fail_download)
+
+        result = json.loads(samples.load_sample_builtin_imdb())
+        assert "error" not in result, f"load_sample_builtin_imdb failed: {result}"
+        assert result["status"] == "loaded"
+
+    def test_load_sample_builtin_imdb_surfaces_download_errors(self, monkeypatch, tmp_path):
+        import json
+
+        from lib import samples
+
+        cache_dir = tmp_path / "cache"
+        monkeypatch.setattr(samples, "_imdb_cache_dir", lambda: cache_dir)
+
+        def _raise(dest):
+            raise OSError("network unreachable")
+
+        monkeypatch.setattr(samples, "_download_imdb_sample", _raise)
+
+        result = json.loads(samples.load_sample_builtin_imdb())
+        assert "error" in result
+        assert "download failed" in result["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -115,9 +176,9 @@ class TestResolvedPathsAreRelative:
             f"SEARCH_UI_STATIC_DIR escapes the scripts dir: {resolved}"
         )
 
-    def test_samples_imdb_candidates_are_under_skill_root(self):
-        """Check that the candidate paths in load_sample_builtin_imdb
-        stay within the skill tree."""
+    def test_samples_imdb_resolution_has_no_repo_root_assumptions(self):
+        """Check that load_sample_builtin_imdb's bundled-path fallback and
+        cache-dir logic never hardcode a path outside the skill/user cache."""
         import inspect
         from lib.samples import load_sample_builtin_imdb
 

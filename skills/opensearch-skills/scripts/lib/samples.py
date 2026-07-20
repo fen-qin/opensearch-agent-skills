@@ -68,17 +68,74 @@ def _infer_text_fields(doc: dict) -> list[str]:
     return text_fields
 
 
-def load_sample_builtin_imdb() -> str:
-    script_dir = Path(__file__).resolve().parent.parent
-    # Look for bundled sample data alongside this script
-    candidates = [
-        script_dir / "sample_data" / "imdb.title.basics.tsv",
-    ]
-    for path in candidates:
-        if path.exists():
-            return load_sample_from_file(str(path.resolve()))
+# IMDb publishes a non-commercial dataset export, refreshed daily, at a
+# stable public URL: https://developer.imdb.com/non-commercial-datasets/
+# title.basics.tsv.gz is the title metadata file (titles, types, years,
+# genres) and is used here as sample data for search app prototyping.
+_IMDB_SAMPLE_URL = "https://datasets.imdbws.com/title.basics.tsv.gz"
+_IMDB_SAMPLE_FILENAME = "imdb.title.basics.tsv"
+_IMDB_SAMPLE_MAX_ROWS = 100_000  # enough rows for a realistic sample without pulling the full multi-million-row dataset
 
-    return json.dumps({"error": "IMDB sample data not found."})
+
+def _imdb_cache_dir() -> Path:
+    """Local cache directory for downloaded sample data.
+
+    Respects XDG_CACHE_HOME when set, otherwise defaults to ~/.cache."""
+    xdg_cache = os.environ.get("XDG_CACHE_HOME")
+    base = Path(xdg_cache) if xdg_cache else Path.home() / ".cache"
+    return base / "opensearch-agent-skills" / "sample_data"
+
+
+def _download_imdb_sample(dest: Path) -> None:
+    """Download IMDb's title.basics.tsv.gz, decompress it, and write the
+    first _IMDB_SAMPLE_MAX_ROWS data rows (plus header) to `dest`."""
+    import gzip
+
+    _validate_url(_IMDB_SAMPLE_URL)
+    req = urllib.request.Request(
+        _IMDB_SAMPLE_URL, headers={"User-Agent": "opensearch-skills/1.0"}
+    )
+    opener = _build_safe_opener()
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = dest.with_suffix(dest.suffix + ".part")
+
+    with opener.open(req, timeout=60) as resp:
+        with gzip.GzipFile(fileobj=resp) as gz, open(
+            tmp_path, "w", encoding="utf-8", newline=""
+        ) as out:
+            for i, raw_line in enumerate(gz):
+                if i > _IMDB_SAMPLE_MAX_ROWS:  # header + N data rows
+                    break
+                out.write(raw_line.decode("utf-8", errors="replace"))
+    tmp_path.replace(dest)
+
+
+def load_sample_builtin_imdb() -> str:
+    """Load the built-in IMDB sample dataset.
+
+    Checks, in order: a local copy bundled alongside this script, a cached
+    copy from a previous download, and finally downloads a fresh copy from
+    IMDb's dataset export (see _IMDB_SAMPLE_URL) and caches it for next time.
+    """
+    script_dir = Path(__file__).resolve().parent.parent
+
+    bundled_path = script_dir / "sample_data" / _IMDB_SAMPLE_FILENAME
+    if bundled_path.exists():
+        return load_sample_from_file(str(bundled_path.resolve()))
+
+    cached_path = _imdb_cache_dir() / _IMDB_SAMPLE_FILENAME
+    if cached_path.exists():
+        return load_sample_from_file(str(cached_path.resolve()))
+
+    try:
+        _download_imdb_sample(cached_path)
+    except Exception as e:
+        return json.dumps({
+            "error": f"IMDB sample data not found locally and download failed: {e}"
+        })
+
+    return load_sample_from_file(str(cached_path.resolve()))
 
 
 def load_sample_from_file(file_path: str) -> str:
