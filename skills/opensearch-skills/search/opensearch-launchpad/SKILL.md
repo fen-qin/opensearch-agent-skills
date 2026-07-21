@@ -130,7 +130,7 @@ See [cli-reference.md](../../cli-reference.md) for the full command reference.
 ### Phase 1 — Collect Sample Data
 
 Ask for the data source. Supported inputs:
-- Built-in datasets (`load-sample --type builtin_imdb`)
+- Built-in datasets (`load-sample --type builtin_imdb`) — uses a small bundled sample (20 titles) by default, no network call. If the user wants a larger sample, ask first, then rerun with `--allow-download` to fetch up to 100k rows from IMDb's public dataset export.
 - Local files: JSON, JSONL, CSV, TSV, Parquet (`load-sample --type local_file --value <path>`)
 - PDF, DOCX, PPTX, XLSX — use Docling to process. Read [document_processing_guide.md](document_processing_guide.md).
 - URLs or pasted JSON

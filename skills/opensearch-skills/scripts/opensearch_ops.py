@@ -183,7 +183,7 @@ def cmd_load_sample(args):
         load_sample_from_paste,
     )
     dispatch = {
-        "builtin_imdb": lambda: load_sample_builtin_imdb(),
+        "builtin_imdb": lambda: load_sample_builtin_imdb(allow_download=args.allow_download),
         "local_file": lambda: load_sample_from_file(args.value),
         "url": lambda: load_sample_from_url(args.value),
         "localhost_index": lambda: load_sample_from_index(args.value),
@@ -478,6 +478,10 @@ def main():
     p.add_argument("-t", "--type", required=True,
                     choices=["builtin_imdb", "local_file", "url", "localhost_index", "paste"])
     p.add_argument("-v", "--value", default="")
+    p.add_argument("--allow-download", action="store_true",
+                    help="For --type builtin_imdb: fetch a larger sample (up to 100k rows) "
+                         "from IMDb's dataset export instead of the small bundled fallback. "
+                         "Tell the user this triggers a network download before using it.")
 
     # cleanup
     sub.add_parser("cleanup", help="Stop UI and clean up")

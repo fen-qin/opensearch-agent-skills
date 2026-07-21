@@ -21,8 +21,15 @@ uv run python scripts/opensearch_ops.py status
 ## Load sample data
 
 ```bash
-# Built-in IMDB dataset
+# Built-in IMDB dataset — uses a small bundled sample (20 titles) by
+# default, no network call.
 uv run python scripts/opensearch_ops.py load-sample --type builtin_imdb
+
+# Same, but fetch a larger sample (up to 100k rows) from IMDb's dataset
+# export instead. Downloads from datasets.imdbws.com on first use and
+# caches locally (~/.cache/opensearch-agent-skills/sample_data/); tell the
+# user this triggers a network download before using this flag.
+uv run python scripts/opensearch_ops.py load-sample --type builtin_imdb --allow-download
 
 # From a local file (JSON, JSONL, CSV, TSV, Parquet)
 uv run python scripts/opensearch_ops.py load-sample --type local_file --value /path/to/data.json
