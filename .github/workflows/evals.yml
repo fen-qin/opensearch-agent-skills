@@ -8,11 +8,37 @@ name: Skill Evals
 #   - Weekly schedule — Monday 06:00 UTC
 #   - Push to main touching skill content or eval fixtures/tests
 #   - pull_request for org-member PRs (secrets available via OIDC)
+#   - pull_request_review (submitted) for fork PRs — runs ONLY when a
+#     maintainer submits an "Approve" review, and ONLY against the exact
+#     commit that review was submitted against (review.commit_id).
 #
 # Security: pull_request_target has been intentionally removed to prevent
-# secret exfiltration via malicious fork PRs. For fork PRs, maintainers
-# should review the code then trigger evals via workflow_dispatch with
-# the reviewed commit SHA.
+# secret exfiltration via malicious fork PRs. The label/approval-click
+# pattern from PR #75 was rejected for the same reason: neither a label
+# nor a generic environment-approval click is cryptographically or
+# procedurally bound to the commit that ends up executing with secrets —
+# a later push can silently ride along on an earlier approval.
+#
+# Instead, fork PRs are evaluated via the pull_request_review trigger:
+#   - It only fires from an actual PR review submission (the same screen
+#     that renders the diff) — there is no separate "infra approval" UI
+#     that can be clicked without viewing the code.
+#   - GitHub stamps every review with the exact commit_id it was
+#     submitted against. The job's `if:` guard requires
+#     review.commit_id == pull_request.head.sha (i.e. nothing has been
+#     pushed since the review), and checkout is pinned to
+#     review.commit_id explicitly — never the PR's live head.
+#   - Branch protection on main should enable "Dismiss stale pull request
+#     approvals when new commits are pushed" so a follow-up push
+#     automatically invalidates the prior approval, closing the loop:
+#     a new commit can never run with secrets until it is reviewed again.
+#   - Note: pull_request_review for fork PRs is still delivered to the
+#     base repository (same as pull_request_target) and DOES have access
+#     to secrets. Safety here comes entirely from the commit_id binding
+#     above, not from secrets being withheld.
+#
+# For org-member (same-repo) PRs, the plain pull_request trigger already
+# grants secrets safely with no additional gating needed.
 #
 # Requires BEDROCK_ACCESS_ROLE repository secret (IAM role ARN).
 # The role is assumed via GitHub OIDC — no static AWS keys stored.
@@ -37,13 +63,15 @@ on:
       - 'skills/**'
       - 'tests/evals/**'
       - '.github/workflows/evals.yml'
+  pull_request_review:
+    types: [submitted]
 
 permissions:
   contents: read
   id-token: write   # required for OIDC role assumption
 
 concurrency:
-  group: evals-${{ github.ref }}
+  group: evals-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -51,15 +79,27 @@ jobs:
     name: Skill Evals (LLM)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Skip fork PRs — secrets (OIDC) are unavailable. Maintainers can use
-    # workflow_dispatch with the fork PR's SHA after review.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Run unless:
+    #   - this is a plain pull_request from a fork (no secrets available;
+    #     use pull_request_review or workflow_dispatch instead), or
+    #   - this is a pull_request_review that is not an approval, or is an
+    #     approval that is now stale (a commit landed after the review).
+    if: >
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+      &&
+      (github.event_name != 'pull_request_review' ||
+       (github.event.review.state == 'approved' &&
+        github.event.review.commit_id == github.event.pull_request.head.sha))
 
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ inputs.ref || github.sha }}
+          # Priority: explicit workflow_dispatch input > reviewed commit
+          # (pull_request_review — pinned to the exact SHA that was
+          # approved, never the PR's live head) > default trigger SHA.
+          ref: ${{ inputs.ref || github.event.review.commit_id || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
